@@ -1,5 +1,6 @@
 const std = @import("std");
 const File = std.fs.File;
+const linux = std.os.linux;
 const clib = @cImport({
     @cInclude("time.h");
     @cInclude("sys/select.h");
@@ -27,7 +28,7 @@ const Reg = enum(u8) {
     PC,
     COND,
 
-    var reg: [@typeInfo(Reg).Enum.fields.len]u16 = undefined;
+    var reg: [@typeInfo(Reg).@"enum".fields.len]u16 = undefined;
 
     pub fn set(self: Reg, val: u16) void {
         reg[@intFromEnum(self)] = val;
@@ -38,20 +39,23 @@ const Reg = enum(u8) {
     }
 
     pub fn add(self: Reg, x: u16) void {
-        self.set(self.get() + x);
+        self.set(self.get() +% x);
     }
 
     fn update_flags(self: Reg) void {
-        const r = self.get();
-        if (r == 0) {
+        const val = self.get();
+        if (val == 0) {
             Reg.COND.set(@intFromEnum(FLAG.ZRO));
-        } else if (r < 0) {
+        } else if (val >> 15 == 1) {
             Reg.COND.set(@intFromEnum(FLAG.NEG));
         } else {
             Reg.COND.set(@intFromEnum(FLAG.POS));
         }
     }
 };
+
+const stdin = std.io.getStdIn();
+const stdout = std.io.getStdOut();
 
 const TR = enum(u16) {
     GETC = 0x20, //  get character from keyboard, not echoed onto the terminal
@@ -62,64 +66,63 @@ const TR = enum(u16) {
     HALT = 0x25, //  halt the program
 
     fn process(self: TR) !void {
-        const stdout = std.io.getStdOut().writer();
-        var buffered_writer = std.io.bufferedWriter(stdout);
-        const writer = buffered_writer.writer();
         switch (self) {
             .GETC => {
-                const stdin = std.io.getStdIn().reader();
-                const c = try stdin.readByte();
+                const c = try stdin.reader().readByte();
                 Reg.R0.set(@as(u16, c));
                 Reg.R0.update_flags();
             },
             .OUT => {
                 const c: u8 = @truncate(Reg.R0.get());
-                try writer.writeByte(c);
-                try buffered_writer.flush();
+                try stdout.writer().writeByte(c);
             },
             .PUTS => {
-                for (memory[Reg.R0.get()..]) |c| {
-                    if (c == 0) break;
-                    try writer.writeByte(@truncate(c));
+                var addr = Reg.R0.get();
+                while (true) : (addr += 1) {
+                    const c = try mem_read(addr);
+                    if (c == 0) {
+                        break;
+                    }
+                    try stdout.writer().writeByte(@truncate(c));
                 }
-                try buffered_writer.flush();
             },
             .IN => {
-                try writer.writeAll("> ");
+                try stdout.writer().writeAll("> ");
                 try TR.OUT.process();
-                try writer.writeByte(@truncate(Reg.R0.get()));
-                try writer.writeByte('\n');
+                try stdout.writer().writeByte(@truncate(Reg.R0.get()));
             },
             .PUTSP => {
-                for (memory[Reg.R0.get()..]) |c| {
-                    const c1: u8 = @truncate(c);
-                    const c2: u8 = @truncate(c >> 8);
-                    if (c1 == 0) break;
-                    try writer.writeByte(@truncate(c1));
-                    if (c2 == 0) break;
-                    try writer.writeByte(@truncate(c2));
+                var addr = Reg.R0.get();
+                while (true) : (addr += 1) {
+                    const cs = try mem_read(addr);
+                    if (cs == 0) break;
+                    const c1 = cs & 0xFF;
+                    const c2 = cs >> 8;
+                    try stdout.writer().writeByte(@truncate(c1));
+                    if (c2 != 0) {
+                        try stdout.writer().writeByte(@truncate(c2));
+                    }
                 }
-                try buffered_writer.flush();
             },
             .HALT => {
-                try writer.writeAll("End of processing");
-                try buffered_writer.flush();
+                try stdout.writer().writeAll("End of processing");
+                restoreInputBuffering();
                 running = false;
             },
         }
     }
 };
 
-fn sign_extend(x: u16, comptime bit_count: u32) u16 {
-    if (((x >> (bit_count - 1)) & 1) == 1) {
-        const mask: u16 = @truncate((0xFFFF << bit_count));
-        return x | mask;
+fn sign_extend(num: u16, comptime og_bits: u4) u16 {
+    if (og_bits == 0) {
+        return 0;
     }
-    return x;
+    const shift = 16 - @as(u16, og_bits);
+    return @bitCast(@as(i16, @bitCast(num << shift)) >> shift);
 }
 
 const OP = enum(u8) {
-    BR = 0,
+    BR,
     ADD,
     LD,
     ST,
@@ -137,14 +140,12 @@ const OP = enum(u8) {
     TRAP,
 
     fn handle_instruction(instr: u16) !void {
-        here:
         const op: OP = @enumFromInt(instr >> 12);
-        std.debug.print("{} {}\n", .{ op, Reg.PC.get() });
         switch (op) {
             .BR => {
-                const pc_offset = sign_extend(instr & 0x1FF, 9);
                 const cond_flag = (instr >> 9) & 0x7;
-                if (cond_flag & Reg.COND.get() != 0) {
+                if ((cond_flag & Reg.COND.get()) != 0) {
+                    const pc_offset = sign_extend(instr & 0x1FF, 9);
                     Reg.PC.add(pc_offset);
                 }
             },
@@ -152,30 +153,30 @@ const OP = enum(u8) {
                 const r0: Reg = @enumFromInt((instr >> 9) & 0x7);
                 const r1: Reg = @enumFromInt((instr >> 6) & 0x7);
                 const imm_flag = (instr >> 5) & 0x1;
-                if (imm_flag == 1) {
+                if (imm_flag != 0) {
                     const imm5 = sign_extend(instr & 0x1F, 5);
-                    r0.set(r1.get() + imm5);
+                    r0.set(r1.get() +% imm5);
                 } else {
                     const r2: Reg = @enumFromInt(instr & 0x7);
-                    r0.set(r1.get() + r2.get());
+                    r0.set(r1.get() +% r2.get());
                 }
                 r0.update_flags();
             },
             .LD => {
                 const r0: Reg = @enumFromInt((instr >> 9) & 0x7);
                 const pc_offset = sign_extend(instr & 0x1FF, 9);
-                r0.set(try mem_read(Reg.PC.get() + pc_offset));
+                r0.set(try mem_read(Reg.PC.get() +% pc_offset));
                 r0.update_flags();
             },
             .ST => {
                 const r0: Reg = @enumFromInt((instr >> 9) & 0x7);
                 const pc_offset = sign_extend(instr & 0x1FF, 9);
-                mem_write(Reg.PC.get() + pc_offset, r0.get());
+                mem_write(Reg.PC.get() +% pc_offset, r0.get());
             },
             .JSR => {
-                const long_flag = (instr >> 11) & 1;
+                const long_flag = (instr >> 11) & 0x1;
                 Reg.R7.set(Reg.PC.get());
-                if (long_flag == 1) {
+                if (long_flag != 0) {
                     const long_pc_offset = sign_extend(instr & 0x7FF, 11);
                     Reg.PC.add(long_pc_offset);
                 } else {
@@ -187,7 +188,7 @@ const OP = enum(u8) {
                 const r0: Reg = @enumFromInt((instr >> 9) & 0x7);
                 const r1: Reg = @enumFromInt((instr >> 6) & 0x7);
                 const imm_flag = (instr >> 5) & 0x1;
-                if (imm_flag == 1) {
+                if (imm_flag != 0) {
                     const imm5 = sign_extend(instr & 0x1F, 5);
                     r0.set(r1.get() & imm5);
                 } else {
@@ -200,14 +201,14 @@ const OP = enum(u8) {
                 const r0: Reg = @enumFromInt((instr >> 9) & 0x7);
                 const r1: Reg = @enumFromInt((instr >> 6) & 0x7);
                 const offset = sign_extend(instr & 0x3F, 6);
-                r0.set(try mem_read(r1.get() + offset));
+                r0.set(try mem_read(r1.get() +% offset));
                 r0.update_flags();
             },
             .STR => {
                 const r0: Reg = @enumFromInt((instr >> 9) & 0x7);
                 const r1: Reg = @enumFromInt((instr >> 6) & 0x7);
                 const offset = sign_extend((instr & 0x3F), 6);
-                mem_write(r1.get() + offset, r0.get());
+                mem_write(r1.get() +% offset, r0.get());
             },
             .RTI => {
                 std.debug.print("The RTI instruction is not supported.", .{});
@@ -217,16 +218,18 @@ const OP = enum(u8) {
                 const r0: Reg = @enumFromInt((instr >> 9) & 0x7);
                 const r1: Reg = @enumFromInt((instr >> 6) & 0x7);
                 r0.set(~r1.get());
+                r0.update_flags();
             },
             .LDI => {
                 const r0: Reg = @enumFromInt((instr >> 9) & 0x7);
                 const pc_offset = sign_extend(instr & 0x1FF, 9);
-                r0.set(try mem_read(Reg.PC.get()) + pc_offset);
+                r0.set(try mem_read(try mem_read(Reg.PC.get() +% pc_offset)));
+                r0.update_flags();
             },
             .STI => {
                 const r0: Reg = @enumFromInt((instr >> 9) & 0x7);
                 const pc_offset = sign_extend(instr & 0x1FF, 9);
-                mem_write(try mem_read(Reg.PC.get() + pc_offset), r0.get());
+                mem_write(try mem_read(Reg.PC.get() +% pc_offset), r0.get());
             },
             .JMP => {
                 const r1: Reg = @enumFromInt((instr >> 6) & 0x7);
@@ -239,7 +242,7 @@ const OP = enum(u8) {
             .LEA => {
                 const r0: Reg = @enumFromInt((instr >> 9) & 0x7);
                 const pc_offset = sign_extend(instr & 0x1FF, 9);
-                r0.set(try mem_read(Reg.PC.get() + pc_offset));
+                r0.set(Reg.PC.get() +% pc_offset);
                 r0.update_flags();
             },
             .TRAP => {
@@ -263,35 +266,29 @@ const MR = enum(u16) {
 };
 
 fn check_key() bool {
-    var readfds: clib.fd_set = undefined;
-    var timeout: clib.timeval = undefined;
-    timeout.tv_sec = 0;
-    timeout.tv_usec = 0;
-    return clib.select(1, &readfds, 0, 0, &timeout) != 0;
+    var fds = [_]linux.pollfd{.{ .fd = linux.STDIN_FILENO, .events = linux.POLL.IN, .revents = 0 }};
+    const reported_events = linux.poll(&fds, fds.len, 0);
+    return reported_events > 0 and (fds[0].revents & linux.POLL.IN) != 0;
 }
 
-var original_tio: clib.termios = undefined;
+var og_termios: linux.termios = undefined;
 
-fn disableInputBuffering() void {
-    const stdin_fd = std.os.linux.STDIN_FILENO;
-    _ = clib.tcgetattr(stdin_fd, &original_tio);
-    var new_tio: clib.termios = original_tio;
-    new_tio.c_lflag &= @bitCast(~clib.ICANON & ~clib.ECHO);
-    _ = clib.tcsetattr(stdin_fd, clib.TCSANOW, &new_tio);
+pub fn disableCanonAndEcho() void {
+    _ = linux.tcgetattr(linux.STDIN_FILENO, &og_termios);
+    var new_termios = og_termios;
+    new_termios.lflag.ICANON = false;
+    new_termios.lflag.ECHO = false;
+    _ = linux.tcsetattr(linux.STDIN_FILENO, linux.TCSA.NOW, &new_termios);
 }
-
 fn restoreInputBuffering() void {
-    const stdin_fd = std.os.linux.STDIN_FILENO;
-    _ = clib.tcsetattr(stdin_fd, clib.TCSANOW, &original_tio);
+    _ = linux.tcsetattr(linux.STDIN_FILENO, linux.TCSA.NOW, &og_termios);
 }
 
 fn mem_read(i: u16) !u16 {
     if (i == @intFromEnum(MR.KBSR)) {
         if (check_key()) {
-            const stdin = std.io.getStdIn().reader();
-            const c = @as(u16, try stdin.readByte());
-            memory[@intFromEnum(MR.KBSR)] = (1 << 15);
-            memory[@intFromEnum(MR.KBDR)] = @as(u16, c);
+            memory[@intFromEnum(MR.KBSR)] = 1 << 15;
+            memory[@intFromEnum(MR.KBDR)] = std.io.getStdIn().reader().readByte() catch memory[@intFromEnum(MR.KBDR)];
         } else {
             memory[@intFromEnum(MR.KBSR)] = 0;
         }
@@ -303,41 +300,44 @@ fn mem_write(i: u16, x: u16) void {
     memory[i] = x;
 }
 
-fn read_image_file(f: File) !void {
-    const reader = File.reader(f);
-    const origin = try reader.readInt(u16, std.builtin.Endian.little);
-
-    const u16_max = std.math.maxInt(u16);
-    var mem_instr_index = origin;
-    reading: while (mem_instr_index < u16_max) {
-        memory[mem_instr_index] = reader.readInt(u16, std.builtin.Endian.little) catch |err| {
-            switch (err) {
-                error.EndOfStream => break :reading,
-                else => std.process.abort(),
-            }
-        };
-        mem_instr_index += 1;
+fn getProgramOrigin(file: std.fs.File) !u16 {
+    var buffer: [2]u8 = undefined;
+    const bytes_read = try file.read(&buffer);
+    if (bytes_read < buffer.len) {
+        return error.InsufficientData;
     }
+    return std.mem.readInt(u16, &buffer, .big);
 }
 
 fn read_image(image_path: [:0]const u8) !void {
-    var file = try std.fs.cwd().openFile(image_path, .{});
+    const file = try std.fs.cwd().openFile(image_path, .{});
     defer file.close();
-    try read_image_file(file);
+    const origin = try getProgramOrigin(file);
+    var buffer: [2]u8 = undefined;
+    var index = origin;
+    while (true) : (index += 1) {
+        const bytes_read = try file.read(&buffer);
+        if (bytes_read < buffer.len or index >= MEMORY_MAX) break;
+        memory[index] = std.mem.readInt(u16, &buffer, .big);
+    }
 }
 
 fn handle_interrupt(_: c_int) callconv(.C) void {
     restoreInputBuffering();
-    const stdout = std.io.getStdOut().writer();
-    var buffered_writer = std.io.bufferedWriter(stdout);
-    const writer = buffered_writer.writer();
-    writer.writeByte('\n') catch {};
+    stdout.writer().writeByte('\n') catch {};
     std.process.exit(2);
 }
 
+var act = std.os.linux.Sigaction{
+    .handler = .{ .handler = handle_interrupt },
+    .mask = std.os.linux.empty_sigset,
+    .flags = 0,
+};
+
 pub fn main() !void {
-    _ = clib.signal(clib.SIGINT, handle_interrupt);
-    disableInputBuffering();
+    _ = linux.sigaction(std.os.linux.SIG.INT, &act, null);
+    _ = linux.sigaction(std.os.linux.SIG.TERM, &act, null);
+    disableCanonAndEcho();
 
     var args = std.process.args();
     _ = args.skip();
