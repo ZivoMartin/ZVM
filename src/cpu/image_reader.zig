@@ -1,74 +1,41 @@
 const std = @import("std");
+
+const linux = std.os.linux;
+const memory = @import("memory.zig");
+const utils = @import("utils.zig");
+const instructions = @import("instructions.zig");
+const registers = @import("registers.zig");
+const Reg = registers.Reg;
+
 const uni = @cImport({
     @cInclude("unicorn/unicorn.h");
 });
 
-const MEMORY_ADDRESS: u32 = 0x1000;
-const MEMORY_SIZE = 0x8000;
-var memory: [MEMORY_SIZE]u8 = undefined;
+pub var running = true;
+
+var act = std.os.linux.Sigaction{
+    .handler = .{ .handler = utils.handle_interrupt },
+    .mask = std.os.linux.empty_sigset,
+    .flags = 0,
+};
 
 pub fn read_image(path: [:0]const u8) !void {
-    const bytes_loaded = try inject_image(path);
+    _ = linux.sigaction(std.os.linux.SIG.INT, &act, null);
+    _ = linux.sigaction(std.os.linux.SIG.TERM, &act, null);
+    utils.disableCanonAndEcho();
 
-    var uc: ?*uni.uc_engine = undefined;
+    try memory.inject_image(path);
 
-    var err = uni.uc_open(uni.UC_ARCH_X86, uni.UC_MODE_64, &uc);
-    if (err != uni.UC_ERR_OK) {
-        std.debug.print("Unicorn init error: {s}\n", .{uni.uc_strerror(err)});
-        return;
+    Reg.COND.set(@intFromEnum(utils.FLAG.ZRO));
+    Reg.PC.set(memory.PC_START);
+
+    while (running) {
+        const instr = memory.read(Reg.PC.get()) catch {
+            std.log.warn("Failed to decode\n", .{});
+            std.process.exit(5);
+        };
+        Reg.PC.add(1);
+        const op: instructions.OP = @enumFromInt(instr >> 12);
+        try op.handle_instruction(instr);
     }
-
-    err = uni.uc_mem_map(uc, MEMORY_ADDRESS, MEMORY_SIZE, uni.UC_PROT_ALL);
-    if (err != uni.UC_ERR_OK) {
-        std.debug.print("Memory mapping failed: {s}\n", .{uni.uc_strerror(err)});
-        return;
-    }
-
-    err = uni.uc_mem_write(uc, MEMORY_ADDRESS, &memory, bytes_loaded);
-    if (err != uni.UC_ERR_OK) {
-        std.debug.print("Memory write failed: {s}\n", .{uni.uc_strerror(err)});
-        return;
-    }
-
-    var hook: uni.uc_hook = undefined;
-    err = uni.uc_hook_add(uc, &hook, uni.UC_HOOK_INTR, @constCast(@ptrCast(&hook_intr)), null, 1, 0);
-    if (err != uni.UC_ERR_OK) {
-        std.debug.print("Hook add failed: {s}\n", .{uni.uc_strerror(err)});
-        return;
-    }
-
-    err = uni.uc_reg_write(uc, uni.UC_X86_REG_RIP, &MEMORY_ADDRESS);
-    var x: i32 = undefined;
-    _ = uni.uc_reg_read(uc, uni.UC_X86_REG_RIP, &x);
-    std.debug.print("{} {} {}\n", .{ x, bytes_loaded, MEMORY_SIZE });
-
-    if (err != uni.UC_ERR_OK) {
-        std.debug.print("Init PC failed: {s}\n", .{uni.uc_strerror(err)});
-        return;
-    }
-
-    err = uni.uc_emu_start(uc, MEMORY_ADDRESS, MEMORY_ADDRESS + bytes_loaded - 1, 0, 0);
-
-    x = undefined;
-    _ = uni.uc_reg_read(uc, uni.UC_X86_REG_RIP, &x);
-    std.debug.print("{}\n", .{x});
-
-    if (err != uni.UC_ERR_OK) {
-        std.debug.print("Execution failed: {s}\n", .{uni.uc_strerror(err)});
-        return;
-    }
-
-    _ = uni.uc_close(uc);
-}
-
-fn inject_image(image_path: [:0]const u8) !usize {
-    const file = try std.fs.cwd().openFile(image_path, .{});
-    defer file.close();
-
-    const bytes_read = try file.readAll(&memory);
-    return bytes_read;
-}
-
-fn hook_intr(_: *uni.uc_engine, intno: u32, _: ?*anyopaque) void {
-    std.debug.print("Interrupt {d} encountered\n", .{intno});
 }
