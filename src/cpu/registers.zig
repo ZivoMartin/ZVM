@@ -1,6 +1,8 @@
 const utils = @import("utils.zig");
+const Instruction = @import("instructions.zig").Instruction;
+const InstructionSigned = @import("instructions.zig").InstructionSigned;
 
-pub const Reg = enum(u8) {
+pub const Reg = enum(u4) {
     R0 = 0,
     R1,
     R2,
@@ -12,17 +14,30 @@ pub const Reg = enum(u8) {
     PC,
     COND,
 
-    var reg: [@typeInfo(Reg).@"enum".fields.len]u16 = undefined;
+    var reg: [@typeInfo(Reg).@"enum".fields.len]Instruction = undefined;
 
-    pub fn set(self: Reg, val: u16) void {
+    pub fn clear() void {
+        for (0..reg.len) |i| reg[i] = 0;
+        Reg.COND.set(@intFromEnum(utils.FLAG.ZRO));
+    }
+
+    pub fn set(self: Reg, val: Instruction) void {
         reg[@intFromEnum(self)] = val;
     }
 
-    pub fn get(self: Reg) u16 {
+    pub fn get(self: Reg) Instruction {
         return reg[@intFromEnum(self)];
     }
 
-    pub fn add(self: Reg, x: u16) void {
+    pub fn set_signed(self: Reg, val: InstructionSigned) void {
+        reg[@intFromEnum(self)] = @bitCast(val);
+    }
+
+    pub fn get_signed(self: Reg) InstructionSigned {
+        return @bitCast(reg[@intFromEnum(self)]);
+    }
+
+    pub fn add(self: Reg, x: Instruction) void {
         self.set(self.get() +% x);
     }
 

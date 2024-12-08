@@ -4,6 +4,7 @@ const linux = std.os.linux;
 const memory = @import("memory.zig");
 const utils = @import("utils.zig");
 const instructions = @import("instructions.zig");
+const InstructionSize = instructions.InstructionSize;
 const registers = @import("registers.zig");
 const Reg = registers.Reg;
 
@@ -30,7 +31,7 @@ pub fn read_image(path: [:0]const u8) !void {
     Reg.PC.set(memory.PC_START);
 
     while (running) {
-        const instr = memory.read(Reg.PC.get()) catch {
+        const instr = memory.read(@truncate(Reg.PC.get())) catch {
             std.log.warn("Failed to decode\n", .{});
             std.process.exit(5);
         };
