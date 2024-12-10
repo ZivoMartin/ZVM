@@ -1,6 +1,8 @@
 const std = @import("std");
-const image_reader = @import("cpu/image_reader.zig");
+const Process = @import("cpu/process.zig").Process;
 const shell = @import("shell/shell.zig");
+const Reg = @import("cpu/registers.zig").Reg;
+const memory = @import("cpu/memory.zig");
 
 pub fn main() !void {
     var args = std.process.args();
@@ -10,5 +12,10 @@ pub fn main() !void {
         return;
     };
 
-    try image_reader.read_image(path);
+    var process = try Process.new(try memory.get_process_mem_space());
+    try process.setup_memory(path);
+
+    while (true) {
+        try process.next_instruction();
+    }
 }

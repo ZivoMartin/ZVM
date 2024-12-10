@@ -3,6 +3,7 @@ const registers = @import("registers.zig");
 const memory = @import("memory.zig");
 const traps = @import("traps.zig");
 const std = @import("std");
+const Process = @import("process.zig").Process;
 
 pub const Instruction: type = u32;
 pub const InstructionSigned: type = i32;
@@ -12,69 +13,98 @@ const Reg = registers.Reg;
 pub const JUMP_CODE = enum(u3) { JMP = 0, JE, JH, JL, JLE, JHE };
 
 pub const OP = enum(u5) {
-    ADD = 0, // Add two values (OK)
-    MUL, // Multiply two values
-    SUB, // Sub two values
-    DIV, // Divide two values
-    MOD, // Mod of two values
-    NEG, // Put the negation of a first register in a memory spot
-    SHL, // Shift left for bitwise operations
-    SHR, // Shift right for bitwise operations
-    AND, // Perform binary and over two values
-    OR, // Perform binary or over two values
-    XOR, // Perform binary xor over two values
-    NOT, // Perform binary not over a values
-    JMP, // Jmp to an address of the code, conatins a jump code indicates the kind of jump
-    INT, // Provoc an interruption
-    PUSH, // Push a value on the stack, support pushf and pushr
-    POP, // Pop a value of the stack, support popf and popr
-    RET, // Pop a value of the stack and perform jump
-    CALL, // Push the stack pointer and jmp
-    MOV, // Mov a value in a register or a memory zone
-    READ, // Read a value in the memory it in a register
-    WRITE, // Write a value in the memory
-    CMP, // Compare two values, actualise the condition flags
-    CLEAR, // Set all the registers at 0
-    HALT, // Stop the program
-    TRACE, // Print the current state of registers/memory (helpful for debugging in a VM).
-    DUP, // Duplicate the top value on the stack.
-    SWAP, // Swap the top two values on the stack.
+    /// Add two values (OK)
+    ADD = 0x0,
+    /// Multiply two values
+    MUL = 0x1,
+    /// Sub two values
+    SUB = 0x2,
+    /// Divide two values
+    DIV = 0x3,
+    /// Mod of two values
+    MOD = 0x4,
+    /// Put the negation of a first register in a memory spot
+    NEG = 0x5,
+    /// Shift left for bitwise operations
+    SHL = 0x6,
+    /// Shift right for bitwise operations
+    SHR = 0x7,
+    /// Perform binary and over two values
+    AND = 0x8,
+    /// Perform binary or over two values
+    OR = 0x9,
+    /// Perform binary xor over two values
+    XOR = 0xA,
+    /// Perform binary not over a values
+    NOT = 0xB,
+    /// Jmp to an address of the code, conatins a jump code indicates the kind of jump
+    JMP = 0xC,
+    /// Provoc an interruption
+    INT = 0xD,
+    /// Push a value on the stack, support pushf and pushr
+    PUSH = 0xE,
+    /// Pop a value of the stack, support popf and popr
+    POP = 0xF,
+    /// Pop a value of the stack and perform jump
+    RET = 0x10,
+    /// Push the stack pointer and jmp
+    CALL = 0x11,
+    /// Mov a value in a register or a memory zone
+    MOV = 0x12,
+    /// Read a value in the memory it in a register
+    READ = 0x13,
+    /// Write a value in the memory
+    WRITE = 0x14,
+    /// Compare two values, actualise the condition flags
+    CMP = 0x15,
+    /// Set all the registers at 0
+    CLEAR = 0x16,
+    /// Stop the program
+    HALT = 0x17,
+    /// Print the current state of registers/memory (helpful for debugging in a VM).
+    TRACE = 0x18,
+    /// Duplicate the top value on the stack.
+    DUP = 0x19,
+    /// Swap the top two values on the stack.
+    SWAP = 0x1A,
 
-    const InstructionProcessingError = error{};
-
-    const instr_handlers: [@typeInfo(OP).@"enum".fields.len]*const fn (Instruction) InstructionProcessingError!void = .{
-        &add,
-        &mul,
-        &sub,
-        &div,
-        &mod,
-        &neg,
-        &shl,
-        &shr,
-        &_and,
-        &_or,
-        &xor,
-        &not,
-        &jmp,
-        &int,
-        &push,
-        &pop,
-        &ret,
-        &call,
-        &mov,
-        &read,
-        &write,
-        &cmp,
-        &clear,
-        &halt,
-        &trace,
-        &dup,
-        &swap,
+    const InstructionProcessingError = error{
+        InvalidInstruction,
+        DivisionByZero,
+        MemoryAccessViolation,
+        StackOverflow,
     };
 
-    pub fn handle_instruction(self: OP, instr: Instruction) !void {
-        const op = @as(usize, @intFromEnum(self));
-        try instr_handlers[op](instr);
+    pub fn handle_instruction(self: OP, instr: Instruction, process: *Process) !void {
+        try switch (self) {
+            .ADD => add(instr),
+            .MUL => mul(instr),
+            .SUB => sub(instr),
+            .DIV => div(instr),
+            .MOD => mod(instr),
+            .NEG => neg(instr),
+            .SHL => shl(instr),
+            .SHR => shr(instr),
+            .AND => _and(instr),
+            .OR => _or(instr),
+            .XOR => xor(instr),
+            .NOT => not(instr),
+            .JMP => jmp(instr),
+            .INT => int(instr),
+            .PUSH => push(instr, process),
+            .POP => pop(instr, process),
+            .RET => ret(instr),
+            .CALL => call(instr),
+            .MOV => mov(instr),
+            .READ => read(instr, process),
+            .WRITE => write(instr, process),
+            .CMP => cmp(instr),
+            .CLEAR => clear(instr),
+            .HALT => halt(instr),
+            .TRACE => trace(instr),
+            .DUP => dup(instr),
+            .SWAP => swap(instr),
+        };
     }
 
     const ArithmeticOperation = struct { dest: Reg, v1: Instruction, v2: Instruction };
@@ -95,6 +125,7 @@ pub const OP = enum(u5) {
         return @enumFromInt(instr & 0x7);
     }
 
+    /// Represents an arithmetic operation with a destination register and two operands.
     pub fn get_op_values(instr: Instruction) ArithmeticOperation {
         const r0 = get_r0(instr);
         const r1 = get_r1(instr);
@@ -218,20 +249,66 @@ pub const OP = enum(u5) {
         }
     }
 
-    fn cmp(_: Instruction) !void {}
+    fn cmp(instr: Instruction) !void {
+        const v1 = get_r0(instr).get();
+        const imm_flag = (instr >> 23) & 0x1;
+
+        const v2 = if (imm_flag != 0)
+            get_immediate_value(instr)
+        else
+            get_r2(instr).get();
+
+        if (v1 == v2) {
+            Reg.set_flag_zero();
+        } else if (v1 < v2) {
+            Reg.set_flag_neg();
+        } else {
+            Reg.set_flag_pos();
+        }
+    }
+
+    fn trace(_: Instruction) !void {
+        Reg.trace();
+    }
+
+    fn clear(_: Instruction) !void {
+        Reg.clear();
+    }
+
+    fn mov(instr: Instruction) !void {
+        const r0 = get_r0(instr);
+        const imm_flag = (instr >> 23) & 0x1;
+        if (imm_flag != 0) {
+            r0.set(get_immediate_value(instr));
+        } else {
+            r0.set(get_r2(instr).get());
+        }
+    }
+
+    fn read(instr: Instruction, process: *Process) !void {
+        const r0 = get_r0(instr);
+        const addr: u20 = @truncate(get_immediate_value(instr));
+        r0.set(try process.read(addr));
+    }
+
+    fn write(instr: Instruction, process: *Process) !void {
+        const r0 = get_r0(instr);
+        const addr: u20 = @truncate(get_immediate_value(instr));
+        try process.write(addr, r0.get());
+    }
 
     fn ret(_: Instruction) !void {}
     fn call(_: Instruction) !void {}
-    fn mov(_: Instruction) !void {}
-    fn read(_: Instruction) !void {}
-    fn write(_: Instruction) !void {}
-    fn clear(_: Instruction) !void {}
-    fn trace(_: Instruction) !void {}
     fn dup(_: Instruction) !void {}
     fn swap(_: Instruction) !void {}
 
-    fn push(_: Instruction) !void {}
-    fn pop(_: Instruction) !void {}
+    fn push(instr: Instruction, process: *Process) !void {
+        try process.stack_push(if ((instr >> 26) & 1 != 0) get_immediate_value(instr) else get_r2(instr).get());
+    }
+
+    fn pop(instr: Instruction, process: *Process) !void {
+        get_r2(instr).set(try process.stack_pop());
+    }
 
     fn halt(_: Instruction) !void {}
     fn int(_: Instruction) !void {}
@@ -421,4 +498,137 @@ test "not" {
     try std.testing.expect(Reg.R0.get() == ~expected);
 
     Reg.clear();
+}
+test "jump" {
+    Reg.PC.set(0);
+}
+
+test "mov" {
+    // Test moving an immediate value into a register
+    Reg.R0.set(0);
+
+    // R0 = immediate 42
+    try OP.mov(0b00000_000_1_00000000000000000101010);
+    try std.testing.expect(Reg.R0.get() == 42);
+
+    // R0 = immediate -1 (20-bit two's complement negative number)
+    try OP.mov(0b00000_000_1_11111111111111111111111);
+    try std.testing.expect(Reg.R0.get_signed() == -1);
+
+    // Test moving a value from another register
+    Reg.R1.set(1337);
+    Reg.R0.set(0);
+
+    // R0 = R1
+    try OP.mov(0b00000_000_000_0_000000000000000000001);
+    try std.testing.expect(Reg.R0.get() == 1337);
+
+    // Another example: R2 = R1
+    Reg.R2.set(0);
+    try OP.mov(0b00000_010_0_00000000000000000000001);
+    try std.testing.expect(Reg.R2.get() == 1337);
+
+    Reg.clear();
+}
+
+test "cmp" {
+    // Test comparison with immediate value
+    Reg.R0.set(10);
+    Reg.R1.set(0);
+
+    // R0 - 5
+    try OP.cmp(0b00000_000_1_00000000000000000101);
+    try std.testing.expect(Reg.COND.get() == @intFromEnum(utils.FLAG.POS));
+
+    // R0 - 10
+    try OP.cmp(0b00000_000_1_00000000000000000001010);
+    try std.testing.expect(Reg.COND.get() == @intFromEnum(utils.FLAG.ZRO));
+
+    // R0 - 15
+    try OP.cmp(0b00000_000_1_00000000000000000001111);
+    try std.testing.expect(Reg.COND.get() == @intFromEnum(utils.FLAG.NEG));
+
+    // Test comparison with another register
+    Reg.R0.set(20);
+    Reg.R2.set(15);
+
+    // R0 - R2
+    try OP.cmp(0b00000_000_0_00000000000000000000010);
+    try std.testing.expect(Reg.COND.get() == @intFromEnum(utils.FLAG.POS));
+
+    Reg.R2.set(20);
+
+    // R0 - R2
+    try OP.cmp(0b00000_000_0_00000000000000000000010);
+    try std.testing.expect(Reg.COND.get() == @intFromEnum(utils.FLAG.ZRO));
+
+    Reg.R2.set(25);
+
+    // R0 - R2
+    try OP.cmp(0b00000_000_0_00000000000000000000010);
+    try std.testing.expect(Reg.COND.get() == @intFromEnum(utils.FLAG.NEG));
+
+    Reg.clear();
+}
+
+test "read" {
+    var process = try Process.new(try memory.get_process_mem_space());
+    process.begin();
+
+    try process.write(30, 10);
+    try OP.read(0b00000_000_0000_00000000000000011110, &process);
+    try std.testing.expect(Reg.R0.get() == 10);
+
+    memory.clean();
+}
+
+test "write" {
+    var process = try Process.new(try memory.get_process_mem_space());
+    process.begin();
+
+    Reg.R0.set(10);
+    try OP.write(0b00000_000_0000_00000000000000011110, &process);
+    try std.testing.expect(try process.read(30) == 10);
+
+    memory.clean();
+}
+
+test "push" {
+    var process = try Process.new(try memory.get_process_mem_space());
+    process.begin();
+
+    Reg.R1.set(1337);
+
+    try OP.push(0b00000_1_00000000000000000000101010, &process);
+    try std.testing.expect(try process.stack_peek() == 42);
+
+    try OP.push(0b00000_0_00000000000000000000000001, &process);
+    try std.testing.expect(try process.stack_peek() == 1337);
+
+    try std.testing.expect(try process.stack_pop() == 1337);
+    try std.testing.expect(try process.stack_pop() == 42);
+
+    Reg.clear();
+    memory.clean();
+}
+
+test "pop" {
+    var process = try Process.new(try memory.get_process_mem_space());
+    process.begin();
+
+    try process.stack_push(42);
+    try process.stack_push(1337);
+
+    Reg.R0.set(0);
+    try OP.pop(0b00000_00000000000000000000000000, &process);
+    try std.testing.expect(Reg.R0.get() == 1337);
+
+    Reg.R1.set(0);
+    try OP.pop(0b00000_000000000000000000000000001, &process);
+    try std.testing.expect(Reg.R1.get() == 42);
+
+    try std.testing.expect(process.stack_empty());
+
+    Reg.clear();
+    memory.clean();
 }

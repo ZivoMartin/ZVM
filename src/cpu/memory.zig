@@ -2,41 +2,49 @@ const utils = @import("utils.zig");
 const std = @import("std");
 const Instruction = @import("instructions.zig").Instruction;
 
-const ADDRESS_SIZE = 20;
-const ADDRESS = u20;
-const MEMORY_MAX: u64 = 1 << ADDRESS_SIZE;
+pub const ADDRESS_SIZE = 20;
+pub const ADDRESS = u20;
+pub const MEMORY_MAX: u64 = 1 << ADDRESS_SIZE;
+pub const PROCESS_MEM_SIZE = 10_000;
+
 var memory: [MEMORY_MAX]Instruction = undefined;
-pub const PC_START = 0x3000;
+var nb_allocated_process_mem_space: usize = 0;
+
+const MemError = error{RunOutOfMemory};
 
 pub fn read(i: ADDRESS) !Instruction {
-    if (i == @intFromEnum(utils.MR.KBSR)) {
-        if (utils.check_key()) {
-            memory[@intFromEnum(utils.MR.KBSR)] = 1 << 15;
-            memory[@intFromEnum(utils.MR.KBDR)] = std.io.getStdIn().reader().readByte() catch memory[@intFromEnum(utils.MR.KBDR)];
-        } else {
-            memory[@intFromEnum(utils.MR.KBSR)] = 0;
-        }
-    }
-    return memory[i];
+    return memory[@intCast(i)];
 }
 
 pub fn write(i: ADDRESS, x: Instruction) void {
-    memory[i] = x;
+    memory[@intCast(i)] = x;
 }
 
-fn getProgramOrigin(_: std.fs.File) !ADDRESS {
-    return 0;
+pub fn reset() void {
+    nb_allocated_process_mem_space = 0;
 }
 
-pub fn inject_image(image_path: [:0]const u8) !void {
-    const file = try std.fs.cwd().openFile(image_path, .{});
-    defer file.close();
-    const origin = try getProgramOrigin(file);
-    var buffer: [4]u8 = undefined;
-    var index = origin;
-    while (true) : (index += 1) {
-        const bytes_read = try file.read(&buffer);
-        if (bytes_read < buffer.len or index >= MEMORY_MAX) break;
-        memory[index] = std.mem.readInt(Instruction, &buffer, .big);
+pub fn clean() void {
+    for (0..memory.len) |i| memory[i] = 0;
+}
+
+pub fn get_process_mem_space() !*[PROCESS_MEM_SIZE]Instruction {
+    const start = nb_allocated_process_mem_space * PROCESS_MEM_SIZE;
+    if (start > MEMORY_MAX) {
+        return MemError.RunOutOfMemory;
     }
+    nb_allocated_process_mem_space += 1;
+
+    return memory[start..][0..PROCESS_MEM_SIZE];
+}
+
+test "memory.get_process_mem_space" {
+    const mem_space1 = try get_process_mem_space();
+    mem_space1.*[0] = 10;
+    try std.testing.expect(try read(0) == 10);
+
+    const mem_space2 = try get_process_mem_space();
+    mem_space2.*[0] = 11;
+    try std.testing.expect(try read(PROCESS_MEM_SIZE) == 11);
+    reset();
 }

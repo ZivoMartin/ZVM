@@ -1,12 +1,7 @@
 .{
     .name = "ZVM",
     .version = "0.0.0",
-    .dependencies = .{
-        .capy = .{
-            .url = "git+https://github.com/capy-ui/capy#971357b54062b9e99d09f3a8777e388e8d0f82ec",
-            .hash = "1220e9d87e7027adbd83ca5dc6fbcd046ccc0e1f1b91b4d69541f13cd233fddcdfd5",
-        },
-    },
+    .dependencies = .{},
 
     .paths = .{ "build.zig", "build.zig.zon", "src" },
 }

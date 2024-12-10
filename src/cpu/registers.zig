@@ -1,6 +1,7 @@
 const utils = @import("utils.zig");
 const Instruction = @import("instructions.zig").Instruction;
 const InstructionSigned = @import("instructions.zig").InstructionSigned;
+const std = @import("std");
 
 pub const Reg = enum(u4) {
     R0 = 0,
@@ -15,11 +16,6 @@ pub const Reg = enum(u4) {
     COND,
 
     var reg: [@typeInfo(Reg).@"enum".fields.len]Instruction = undefined;
-
-    pub fn clear() void {
-        for (0..reg.len) |i| reg[i] = 0;
-        Reg.COND.set(@intFromEnum(utils.FLAG.ZRO));
-    }
 
     pub fn set(self: Reg, val: Instruction) void {
         reg[@intFromEnum(self)] = val;
@@ -42,13 +38,32 @@ pub const Reg = enum(u4) {
     }
 
     pub fn update_flags(self: Reg) void {
-        const val = self.get();
+        const val: InstructionSigned = @bitCast(self.get());
         if (val == 0) {
-            Reg.COND.set(@intFromEnum(utils.FLAG.ZRO));
-        } else if (val >> 15 == 1) {
-            Reg.COND.set(@intFromEnum(utils.FLAG.NEG));
+            set_flag_zero();
+        } else if (val < 0) {
+            set_flag_neg();
         } else {
-            Reg.COND.set(@intFromEnum(utils.FLAG.POS));
+            set_flag_pos();
         }
+    }
+
+    pub fn set_flag_zero() void {
+        Reg.COND.set(@intFromEnum(utils.FLAG.ZRO));
+    }
+    pub fn set_flag_pos() void {
+        Reg.COND.set(@intFromEnum(utils.FLAG.POS));
+    }
+    pub fn set_flag_neg() void {
+        Reg.COND.set(@intFromEnum(utils.FLAG.NEG));
+    }
+
+    pub fn trace() void {
+        for (reg) |r| std.debug.print("{} ", .{r});
+        std.debug.print("\n", .{});
+    }
+
+    pub fn clear() void {
+        for (0..reg.len) |i| reg[i] = 0;
     }
 };
