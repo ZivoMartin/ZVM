@@ -8,8 +8,7 @@ const Instruction = instructions.Instruction;
 const InstructionSize = instructions.InstructionSize;
 const Reg = @import("registers.zig").Reg;
 const STACK_ADDRESS = PROCESS_MEM_SIZE - 1;
-
-pub const SysCall: type = u32;
+const Syscall = @import("../kernel/syscall.zig").Syscall;
 
 const ProcessError = error{ RunOutOfMemory, InvalidExecutableSize, DecodeFailed, StackOverflow, StackEmpty, CodeReading, CodeWriting };
 
@@ -18,6 +17,7 @@ pub const Process = struct {
     process_memory: *[PROCESS_MEM_SIZE]u8,
     code_size: usize = 0,
     stack_pointer: usize = STACK_ADDRESS,
+    running: bool = true,
 
     pub fn new(process_memory: *[PROCESS_MEM_SIZE]u8) !Process {
         return Process{ .process_memory = process_memory };
@@ -44,7 +44,6 @@ pub const Process = struct {
     }
 
     pub fn read(self: *const Process, i: memory.ADDRESS) !u8 {
-        if (i < self.code_size) return ProcessError.CodeReading;
         return self.process_memory.*[@intCast(i)];
     }
 
@@ -98,18 +97,18 @@ pub const Process = struct {
         const file = try std.fs.cwd().openFile(image_path, .{});
         defer file.close();
         const origin = try getProgramOrigin(file);
-        var buffer: [4]u8 = undefined;
+        var buffer: [1]u8 = undefined;
         var index = origin;
         while (true) : (index += 1) {
             const bytes_read = try file.read(&buffer);
             if (bytes_read == 0) break;
-            if (bytes_read != 4) return ProcessError.InvalidExecutableSize;
             if (index >= self.process_memory.len) return ProcessError.RunOutOfMemory;
-            self.write_instruction(std.mem.readInt(Instruction, &buffer, .big));
+            try self.write(index, buffer[0]);
+            self.code_size += 1;
         }
     }
 
-    pub fn next_instruction(self: *Process) !?SysCall {
+    pub fn next_instruction(self: *Process) !?Syscall {
         const instr = try self.read_instruction();
         const op: instructions.OP = @enumFromInt(instr >> 27);
         std.debug.print("{}\n", .{op});

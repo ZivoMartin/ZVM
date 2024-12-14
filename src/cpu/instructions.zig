@@ -5,6 +5,7 @@ const traps = @import("traps.zig");
 const std = @import("std");
 const _process = @import("process.zig");
 const Process = _process.Process;
+const Syscall = @import("../kernel/syscall.zig").Syscall;
 
 pub const Instruction: type = u32;
 pub const InstructionSigned: type = i32;
@@ -77,8 +78,8 @@ pub const OP = enum(u5) {
         StackOverflow,
     };
 
-    pub fn get_syscall(self: OP) ?_process.SysCall {
-        return if (self == .INT or self == .HALT) Reg.R0.get() else null;
+    pub fn get_syscall(self: OP) ?Syscall {
+        return if (self == .INT or self == .HALT) @enumFromInt(Reg.R0.get()) else null;
     }
 
     pub fn handle_instruction(self: OP, instr: Instruction, process: *Process) !void {
@@ -116,7 +117,7 @@ pub const OP = enum(u5) {
     const ArithmeticOperation = struct { dest: Reg, v1: Instruction, v2: Instruction };
 
     fn is_immediate(instr: Instruction) bool {
-        return (instr >> 26) & 1 != 0;
+        return (instr >> 26) & 1 == 1;
     }
 
     fn get_immediate_value(instr: Instruction) Instruction {
