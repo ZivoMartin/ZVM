@@ -3,10 +3,12 @@ const registers = @import("registers.zig");
 const memory = @import("memory.zig");
 const traps = @import("traps.zig");
 const std = @import("std");
-const Process = @import("process.zig").Process;
+const _process = @import("process.zig");
+const Process = _process.Process;
 
 pub const Instruction: type = u32;
 pub const InstructionSigned: type = i32;
+pub const InstructionSize: usize = (@bitSizeOf(Instruction) / 8);
 
 const Reg = registers.Reg;
 
@@ -75,6 +77,10 @@ pub const OP = enum(u5) {
         StackOverflow,
     };
 
+    pub fn get_syscall(self: OP) ?_process.SysCall {
+        return if (self == .INT or self == .HALT) Reg.R0.get() else null;
+    }
+
     pub fn handle_instruction(self: OP, instr: Instruction, process: *Process) !void {
         try switch (self) {
             .ADD => add(instr),
@@ -93,21 +99,25 @@ pub const OP = enum(u5) {
             .INT => int(instr),
             .PUSH => push(instr, process),
             .POP => pop(instr, process),
-            .RET => ret(instr),
-            .CALL => call(instr),
+            .RET => ret(process),
+            .CALL => call(instr, process),
             .MOV => mov(instr),
             .READ => read(instr, process),
             .WRITE => write(instr, process),
             .CMP => cmp(instr),
             .CLEAR => clear(instr),
-            .HALT => halt(instr),
+            .HALT => halt(),
             .TRACE => trace(instr),
-            .DUP => dup(instr),
-            .SWAP => swap(instr),
+            .DUP => dup(process),
+            .SWAP => swap(process),
         };
     }
 
     const ArithmeticOperation = struct { dest: Reg, v1: Instruction, v2: Instruction };
+
+    fn is_immediate(instr: Instruction) bool {
+        return (instr >> 26) & 1 != 0;
+    }
 
     fn get_immediate_value(instr: Instruction) Instruction {
         return utils.sign_extend(instr & 0x1FFFFF, 20);
@@ -278,7 +288,7 @@ pub const OP = enum(u5) {
     fn mov(instr: Instruction) !void {
         const r0 = get_r0(instr);
         const imm_flag = (instr >> 23) & 0x1;
-        if (imm_flag != 0) {
+        if (imm_flag == 1) {
             r0.set(get_immediate_value(instr));
         } else {
             r0.set(get_r2(instr).get());
@@ -288,30 +298,50 @@ pub const OP = enum(u5) {
     fn read(instr: Instruction, process: *Process) !void {
         const r0 = get_r0(instr);
         const addr: u20 = @truncate(get_immediate_value(instr));
-        r0.set(try process.read(addr));
+        r0.set(try process.readu32(addr));
     }
 
     fn write(instr: Instruction, process: *Process) !void {
         const r0 = get_r0(instr);
         const addr: u20 = @truncate(get_immediate_value(instr));
-        try process.write(addr, r0.get());
+        try process.writeu32(addr, r0.get());
     }
 
-    fn ret(_: Instruction) !void {}
-    fn call(_: Instruction) !void {}
-    fn dup(_: Instruction) !void {}
-    fn swap(_: Instruction) !void {}
+    fn ret(process: *Process) !void {
+        Reg.PC.set(try process.stack_pop());
+    }
+
+    fn call(instr: Instruction, process: *Process) !void {
+        try process.stack_push(Reg.PC.get());
+        Reg.PC.set(if (is_immediate(instr)) get_immediate_value(instr) else get_r2(instr).get());
+    }
+
+    fn dup(process: *Process) !void {
+        try process.stack_push(try process.stack_peek());
+    }
+
+    fn swap(process: *Process) !void {
+        const old_top = try process.stack_pop();
+        const new_top = try process.stack_pop();
+        try process.stack_push(old_top);
+        try process.stack_push(new_top);
+    }
 
     fn push(instr: Instruction, process: *Process) !void {
-        try process.stack_push(if ((instr >> 26) & 1 != 0) get_immediate_value(instr) else get_r2(instr).get());
+        try process.stack_push(if (is_immediate(instr)) get_immediate_value(instr) else get_r2(instr).get());
     }
 
     fn pop(instr: Instruction, process: *Process) !void {
         get_r2(instr).set(try process.stack_pop());
     }
 
-    fn halt(_: Instruction) !void {}
-    fn int(_: Instruction) !void {}
+    fn halt() !void {
+        Reg.R0.set(0);
+    }
+
+    fn int(instr: Instruction) !void {
+        Reg.R0.set(if (is_immediate(instr)) get_immediate_value(instr) else get_r2(instr).get());
+    }
 };
 
 test "add" {
@@ -575,7 +605,7 @@ test "read" {
     var process = try Process.new(try memory.get_process_mem_space());
     process.begin();
 
-    try process.write(30, 10);
+    try process.writeu32(30, 10);
     try OP.read(0b00000_000_0000_00000000000000011110, &process);
     try std.testing.expect(Reg.R0.get() == 10);
 
@@ -588,7 +618,7 @@ test "write" {
 
     Reg.R0.set(10);
     try OP.write(0b00000_000_0000_00000000000000011110, &process);
-    try std.testing.expect(try process.read(30) == 10);
+    try std.testing.expect(try process.readu32(30) == 10);
 
     memory.clean();
 }
@@ -626,6 +656,79 @@ test "pop" {
     Reg.R1.set(0);
     try OP.pop(0b00000_000000000000000000000000001, &process);
     try std.testing.expect(Reg.R1.get() == 42);
+
+    try std.testing.expect(process.stack_empty());
+
+    Reg.clear();
+    memory.clean();
+}
+
+test "swap" {
+    var process = try Process.new(try memory.get_process_mem_space());
+    process.begin();
+
+    try process.stack_push(42);
+    try process.stack_push(1337);
+
+    try OP.swap(&process);
+    try std.testing.expect(try process.stack_pop() == 42);
+    try std.testing.expect(try process.stack_pop() == 1337);
+    try std.testing.expect(process.stack_empty());
+
+    Reg.clear();
+    memory.clean();
+}
+
+test "dup" {
+    var process = try Process.new(try memory.get_process_mem_space());
+    process.begin();
+
+    try process.stack_push(42);
+
+    try OP.dup(&process);
+    try std.testing.expect(try process.stack_pop() == 42);
+    try std.testing.expect(try process.stack_pop() == 42);
+    try std.testing.expect(process.stack_empty());
+
+    Reg.clear();
+    memory.clean();
+}
+
+test "call" {
+    var process = try Process.new(try memory.get_process_mem_space());
+    process.begin();
+
+    Reg.R1.set(1337);
+    Reg.PC.set(10);
+
+    try OP.call(0b00000_1_00000000000000000000101010, &process);
+    try std.testing.expect(try process.stack_peek() == 10);
+    try std.testing.expect(Reg.PC.get() == 42);
+
+    try OP.call(0b00000_0_00000000000000000000000001, &process);
+    try std.testing.expect(try process.stack_peek() == 42);
+    try std.testing.expect(Reg.PC.get() == 1337);
+
+    try std.testing.expect(try process.stack_pop() == 42);
+    try std.testing.expect(try process.stack_pop() == 10);
+    try std.testing.expect(process.stack_empty());
+
+    Reg.clear();
+    memory.clean();
+}
+
+test "ret" {
+    var process = try Process.new(try memory.get_process_mem_space());
+    process.begin();
+
+    try process.stack_push(1);
+    try process.stack_push(2);
+
+    try OP.ret(&process);
+    try std.testing.expect(Reg.PC.get() == 2);
+
+    try OP.ret(&process);
+    try std.testing.expect(Reg.PC.get() == 1);
 
     try std.testing.expect(process.stack_empty());
 

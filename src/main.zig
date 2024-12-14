@@ -16,6 +16,9 @@ pub fn main() !void {
     try process.setup_memory(path);
 
     while (true) {
-        try process.next_instruction();
+        const syscall = try process.next_instruction();
+        if (syscall != null) {
+            if (syscall.? == 0) break; // Halt handler
+        }
     }
 }

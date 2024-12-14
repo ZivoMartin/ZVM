@@ -4,6 +4,21 @@ pub const stdin = std.io.getStdIn();
 pub const stdout = std.io.getStdOut();
 const Instruction = @import("instructions.zig").Instruction;
 
+pub fn u32_bytes(x: u32) [4]u8 {
+    return .{
+        @truncate(x >> 24),
+        @truncate(x >> 16 & 0xFF),
+        @truncate(x >> 8 & 0xFF),
+        @truncate(x & 0xFF),
+    };
+}
+
+pub fn read_u32(buff: [4]u8) u32 {
+    return (@as(u32, buff[0]) << 24) |
+        (@as(u32, buff[1]) << 16) |
+        (@as(u32, buff[2]) << 8) |
+        @as(u32, buff[3]);
+}
 pub fn sign_extend(num: Instruction, comptime og_bits: u8) Instruction {
     if (og_bits == 0) {
         return 0;
@@ -28,4 +43,10 @@ test "sign extend" {
     try std.testing.expectEqual(0b1111_1111_1111_1111_1111_1111_0000_1111, sign_extend(0b0000_0000_0000_0000_0000_1111_0000_1111, 12));
     try std.testing.expectEqual(0b0000_0000_0000_0000_0010_0000_0000_0000, sign_extend(0b0000_0000_0000_0000_0010_0000_0000_0000, 15));
     try std.testing.expectEqual(0b1111_1111_1111_1111_1100_0000_0000_0000, sign_extend(0b0000_0000_0000_0000_0100_0000_0000_0000, 15));
+}
+
+test "u32_bytes_cast" {
+    const x = 100;
+    const buff = u32_bytes(x);
+    try std.testing.expectEqual(read_u32(buff), x);
 }
