@@ -13,7 +13,7 @@ pub const InstructionSize: usize = (@bitSizeOf(Instruction) / 8);
 
 const Reg = registers.Reg;
 
-pub const JUMP_CODE = enum(u3) { JMP = 0, JE, JH, JL, JLE, JHE };
+pub const JUMP_CODE = enum(u3) { JMP = 0x0, JE = 0x1, JH = 0x2, JL = 0x3, JLE = 0x4, JHE = 0x5 };
 
 pub const OP = enum(u5) {
     /// Add two values (OK)
@@ -226,8 +226,7 @@ pub const OP = enum(u5) {
 
     fn jmp(instr: Instruction) !void {
         const jcode: JUMP_CODE = @enumFromInt((instr >> 24) & 0x7);
-
-        const addr = if ((instr >> 22) & 1 == 1) get_immediate_value(instr) else get_r2(instr).get();
+        const addr = if ((instr >> 23) & 1 == 1) get_immediate_value(instr) else get_r2(instr).get();
         const cond = Reg.COND.get();
         switch (jcode) {
             .JMP => {
