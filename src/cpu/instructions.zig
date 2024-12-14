@@ -226,7 +226,8 @@ pub const OP = enum(u5) {
 
     fn jmp(instr: Instruction) !void {
         const jcode: JUMP_CODE = @enumFromInt((instr >> 24) & 0x7);
-        const addr = if ((instr >> 24) & 1 != 0) get_immediate_value(instr) else get_r2(instr).get();
+
+        const addr = if ((instr >> 22) & 1 == 1) get_immediate_value(instr) else get_r2(instr).get();
         const cond = Reg.COND.get();
         switch (jcode) {
             .JMP => {
