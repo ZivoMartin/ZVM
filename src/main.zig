@@ -1,5 +1,5 @@
-const kernel = @import("kernel/kernel.zig");
+const booter = @import("kernel/booter.zig");
 
 pub fn main() !void {
-    try kernel.boot();
+    try booter.boot();
 }
