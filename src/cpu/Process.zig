@@ -7,6 +7,10 @@ const instructions = @import("instructions.zig");
 const Instruction = instructions.Instruction;
 const InstructionSize = instructions.InstructionSize;
 const Reg = @import("registers.zig").Reg;
+
+const ContextSaver = @import("ContextSaver.zig").ContextSaver;
+
+const ErrorMessageAddr = 0x100;
 const STACK_ADDRESS = PROCESS_MEM_SIZE - 1;
 const Syscall = @import("../kernel/syscall.zig").Syscall;
 
@@ -19,6 +23,7 @@ pub const Process = struct {
     stack_pointer: usize = STACK_ADDRESS,
     running: bool = true,
     allocator: std.mem.Allocator,
+    context_saver: ContextSaver,
 
     pub fn new(allocator: std.mem.Allocator, process_memory: *[PROCESS_MEM_SIZE]u8) !*Process {
         const p = try allocator.create(Process);
@@ -27,16 +32,23 @@ pub const Process = struct {
         p.code_size = 0;
         p.stack_pointer = STACK_ADDRESS;
         p.running = true;
+        p.context_saver = ContextSaver.new();
+
         return p;
     }
 
-    pub fn begin(_: *const Process) void {
-        Reg.COND.set(@intFromEnum(utils.FLAG.ZRO));
-        Reg.PC.set(0);
+    pub fn restore_context(self: *Process) void {
+        self.context_saver.restore_context();
     }
 
-    fn getProgramOrigin(_: std.fs.File) !Memory.ADDRESS {
-        return 0;
+    pub fn save_context(self: *Process) void {
+        self.context_saver.save();
+    }
+
+    fn getProgramOrigin(f: *const std.fs.File) !Memory.ADDRESS {
+        var buffer: [4]u8 = undefined;
+        _ = try f.read(&buffer);
+        return @truncate(utils.read_u32(buffer));
     }
 
     pub fn readu32(self: *const Process, i: Memory.ADDRESS) !u32 {
@@ -50,7 +62,7 @@ pub const Process = struct {
         self.force_write(i, &buffer);
     }
 
-    pub fn read(self: *const Process, i: Memory.ADDRESS) !u8 {
+    pub fn read(self: *const Process, i: Memory.ADDRESS) u8 {
         return self.process_memory.*[@intCast(i)];
     }
 
@@ -63,12 +75,27 @@ pub const Process = struct {
         for (0..4) |k| self.process_memory.*[@intCast(i + k)] = x.*[k];
     }
 
+    pub fn write_string(self: *Process, addr: Memory.ADDRESS, s: []const u8) void {
+        for (s, addr..) |c, i| {
+            if (c == 0) {
+                break;
+            }
+            self.process_memory.*[i] = c;
+        }
+    }
+
     pub fn read_instruction(self: *const Process) !Instruction {
         if (Reg.PC.get() >= self.code_size) return ProcessError.DecodeFailed;
         const pc = Reg.PC.get();
         const instr = utils.read_u32(.{ self.process_memory[pc], self.process_memory[pc + 1], self.process_memory[pc + 2], self.process_memory[pc + 3] });
         Reg.PC.add(InstructionSize);
         return instr;
+    }
+
+    pub fn mem_read(self: *Process, addr: Memory.ADDRESS) []const u8 {
+        var i = addr;
+        while (self.read(i) != 0) i += 1;
+        return self.process_memory[addr .. i + 1];
     }
 
     pub fn write_instruction(self: *Process, x: Instruction) void {
@@ -100,12 +127,19 @@ pub const Process = struct {
         return res;
     }
 
+    pub fn put_error(self: *Process, err: []const u8) void {
+        Reg.R7.set(ErrorMessageAddr);
+        self.write_string(ErrorMessageAddr, @ptrCast(err));
+    }
+
     pub fn setup_memory(self: *Process, image_path: []const u8) !void {
         const file = try std.fs.cwd().openFile(image_path, .{});
         defer file.close();
-        const origin = try getProgramOrigin(file);
+        const origin = try getProgramOrigin(&file);
+        Reg.PC.set(origin);
+        self.context_saver.set_reg(Reg.PC, origin);
         var buffer: [1]u8 = undefined;
-        var index = origin;
+        var index: u20 = 0;
         while (true) : (index += 1) {
             const bytes_read = try file.read(&buffer);
             if (bytes_read == 0) break;
@@ -118,7 +152,7 @@ pub const Process = struct {
     pub fn next_instruction(self: *Process) !?Syscall {
         const instr = try self.read_instruction();
         const op: instructions.OP = @enumFromInt(instr >> 27);
-        // std.debug.print("{}\n", .{op});
+        std.debug.print("{}\n", .{op});
         try op.handle_instruction(instr, self);
         return op.get_syscall();
     }
@@ -135,7 +169,7 @@ test "Process.next_instruction" {
     process.write_instruction(0b10010_000_1_00000000000000000101010);
     process.write_instruction(0b10010_001_1_00000000000000000000001);
     process.write_instruction(0b00000_000_001_0_00000000000000000_000);
-    process.begin();
+    process.restore_context();
     for (0..3) |_| _ = try process.next_instruction();
     try std.testing.expect(Reg.R0.get() == 43);
     Reg.clear();

@@ -87,6 +87,7 @@ pub const Distributer = struct {
         var timer: std.time.Timer = try std.time.Timer.start();
         while (true) {
             const process = self.get_next();
+            process.restore_context();
             timer.reset();
             while (timer.read() < ProcessExecutionTime and process.running) {
                 const syscall = try process.next_instruction();
@@ -94,6 +95,7 @@ pub const Distributer = struct {
                     try syscall.?.handle(process);
                 }
             }
+            process.save_context();
         }
     }
 

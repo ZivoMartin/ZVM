@@ -1,0 +1,33 @@
+check_error:
+trace    
+and r7, r7 ; if positive result, then display the error
+je no_error    
+mov r1, r7 ; mov the content of r0 (the address of the error message in r1)
+int 1 ; Put it on stdout        
+halt
+no_error:
+ret
+                    
+main:    
+int 3 ; init the graphic interface
+call check_error
+            
+push 800 ; Width
+push 600 ; Height
+push window_title    
+int 4 ; open a window
+call check_error
+; Now, Window should be in r0 and Renderer in r1
+trace
+xor r2, r2
+mov r3, 10000    
+loop:
+cmp r2, r3
+jl loop
+push r0 ; Pusing the window above the stack
+push r1 ; Pusing the renderer above the stack
+int 5 ; Destroy window and renderer
+call check_error                       
+halt
+    
+window_title: "Assembly Shell"    

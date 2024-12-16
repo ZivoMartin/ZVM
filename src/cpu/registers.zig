@@ -15,7 +15,13 @@ pub const Reg = enum(u4) {
     PC,
     COND,
 
-    var reg: [@typeInfo(Reg).@"enum".fields.len]Instruction = undefined;
+    pub const RegSet: type = [@typeInfo(Reg).@"enum".fields.len]Instruction;
+
+    var reg: RegSet = undefined;
+
+    pub fn get_set() RegSet {
+        return reg;
+    }
 
     pub fn set(self: Reg, val: Instruction) void {
         reg[@intFromEnum(self)] = val;

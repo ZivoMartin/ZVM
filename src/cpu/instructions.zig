@@ -124,12 +124,8 @@ pub const OP = enum(u5) {
         return utils.sign_extend(instr & 0x1FFFFF, 20);
     }
 
-    fn get_r0(instr: Instruction) Reg {
-        return @enumFromInt((instr >> 24) & 0x7);
-    }
-
     fn get_r1(instr: Instruction) Reg {
-        return @enumFromInt((instr >> 21) & 0x7);
+        return @enumFromInt((instr >> 24) & 0x7);
     }
 
     fn get_r2(instr: Instruction) Reg {
@@ -138,10 +134,9 @@ pub const OP = enum(u5) {
 
     /// Represents an arithmetic operation with a destination register and two operands.
     pub fn get_op_values(instr: Instruction) ArithmeticOperation {
-        const r0 = get_r0(instr);
         const r1 = get_r1(instr);
         const imm_flag = (instr >> 20) & 0x1;
-        var res = ArithmeticOperation{ .dest = r0, .v1 = r1.get(), .v2 = 0 };
+        var res = ArithmeticOperation{ .dest = r1, .v1 = r1.get(), .v2 = 0 };
         if (imm_flag != 0) {
             res.v2 = get_immediate_value(instr);
         } else {
@@ -211,14 +206,14 @@ pub const OP = enum(u5) {
     }
 
     fn not(instr: Instruction) !void {
-        const r0 = get_r0(instr);
+        const r0 = get_r1(instr);
         const r1 = get_r1(instr);
         r0.set(~r1.get());
         r0.update_flags();
     }
 
     fn neg(instr: Instruction) !void {
-        const r0 = get_r0(instr);
+        const r0 = get_r1(instr);
         const r1 = get_r1(instr);
         const val: i32 = @bitCast(r1.get());
         r0.set(@bitCast(-val));
@@ -261,7 +256,7 @@ pub const OP = enum(u5) {
     }
 
     fn cmp(instr: Instruction) !void {
-        const v1 = get_r0(instr).get();
+        const v1 = get_r1(instr).get();
         const imm_flag = (instr >> 23) & 0x1;
 
         const v2 = if (imm_flag != 0)
@@ -287,7 +282,7 @@ pub const OP = enum(u5) {
     }
 
     fn mov(instr: Instruction) !void {
-        const r0 = get_r0(instr);
+        const r0 = get_r1(instr);
         const imm_flag = (instr >> 23) & 0x1;
         if (imm_flag == 1) {
             r0.set(get_immediate_value(instr));
@@ -297,13 +292,13 @@ pub const OP = enum(u5) {
     }
 
     fn read(instr: Instruction, process: *Process) !void {
-        const r0 = get_r0(instr);
+        const r0 = get_r1(instr);
         const addr: u20 = @truncate(get_immediate_value(instr));
         r0.set(try process.readu32(addr));
     }
 
     fn write(instr: Instruction, process: *Process) !void {
-        const r0 = get_r0(instr);
+        const r0 = get_r1(instr);
         const addr: u20 = @truncate(get_immediate_value(instr));
         try process.writeu32(addr, r0.get());
     }
