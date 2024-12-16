@@ -1,6 +1,6 @@
 const utils = @import("utils.zig");
 const registers = @import("registers.zig");
-const memory = @import("memory.zig");
+const Memory = @import("Memory.zig");
 const traps = @import("traps.zig");
 const std = @import("std");
 const _process = @import("Process.zig");
@@ -603,29 +603,29 @@ test "cmp" {
 }
 
 test "read" {
-    var process = try Process.new(try memory.get_process_mem_space());
+    var process = try Process.new(try Memory.get_process_mem_space());
     process.begin();
 
     try process.writeu32(30, 10);
     try OP.read(0b00000_000_0000_00000000000000011110, &process);
     try std.testing.expect(Reg.R0.get() == 10);
 
-    memory.clean();
+    Memory.clean();
 }
 
 test "write" {
-    var process = try Process.new(try memory.get_process_mem_space());
+    var process = try Process.new(try Memory.get_process_mem_space());
     process.begin();
 
     Reg.R0.set(10);
     try OP.write(0b00000_000_0000_00000000000000011110, &process);
     try std.testing.expect(try process.readu32(30) == 10);
 
-    memory.clean();
+    Memory.clean();
 }
 
 test "push" {
-    var process = try Process.new(try memory.get_process_mem_space());
+    var process = try Process.new(try Memory.get_process_mem_space());
     process.begin();
 
     Reg.R1.set(1337);
@@ -640,11 +640,11 @@ test "push" {
     try std.testing.expect(try process.stack_pop() == 42);
 
     Reg.clear();
-    memory.clean();
+    Memory.clean();
 }
 
 test "pop" {
-    var process = try Process.new(try memory.get_process_mem_space());
+    var process = try Process.new(try Memory.get_process_mem_space());
     process.begin();
 
     try process.stack_push(42);
@@ -661,11 +661,11 @@ test "pop" {
     try std.testing.expect(process.stack_empty());
 
     Reg.clear();
-    memory.clean();
+    Memory.clean();
 }
 
 test "swap" {
-    var process = try Process.new(try memory.get_process_mem_space());
+    var process = try Process.new(try Memory.get_process_mem_space());
     process.begin();
 
     try process.stack_push(42);
@@ -677,11 +677,11 @@ test "swap" {
     try std.testing.expect(process.stack_empty());
 
     Reg.clear();
-    memory.clean();
+    Memory.clean();
 }
 
 test "dup" {
-    var process = try Process.new(try memory.get_process_mem_space());
+    var process = try Process.new(try Memory.get_process_mem_space());
     process.begin();
 
     try process.stack_push(42);
@@ -692,11 +692,11 @@ test "dup" {
     try std.testing.expect(process.stack_empty());
 
     Reg.clear();
-    memory.clean();
+    Memory.clean();
 }
 
 test "call" {
-    var process = try Process.new(try memory.get_process_mem_space());
+    var process = try Process.new(try Memory.get_process_mem_space());
     process.begin();
 
     Reg.R1.set(1337);
@@ -715,11 +715,11 @@ test "call" {
     try std.testing.expect(process.stack_empty());
 
     Reg.clear();
-    memory.clean();
+    Memory.clean();
 }
 
 test "ret" {
-    var process = try Process.new(try memory.get_process_mem_space());
+    var process = try Process.new(try Memory.get_process_mem_space());
     process.begin();
 
     try process.stack_push(1);
@@ -734,5 +734,5 @@ test "ret" {
     try std.testing.expect(process.stack_empty());
 
     Reg.clear();
-    memory.clean();
+    Memory.clean();
 }

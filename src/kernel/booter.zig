@@ -2,7 +2,7 @@ const std = @import("std");
 const Process = @import("../cpu/Process.zig").Process;
 const shell = @import("../shell/shell.zig");
 const Reg = @import("../cpu/registers.zig").Reg;
-const memory = @import("../cpu/memory.zig");
+const Memory = @import("../cpu/Memory.zig");
 const Kernel = @import("kernel.zig").Kernel;
 
 fn shell_boot() !void {
@@ -14,14 +14,17 @@ fn shell_boot() !void {
 }
 
 fn testing_boot(path: [:0]const u8) !void {
-    var process = try Process.new(try memory.get_process_mem_space());
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
+    var process = try Process.new(arena.allocator(), try Memory.get_process_mem_space());
     try process.setup_memory(path);
 
     while (process.running) {
         const syscall = try process.next_instruction();
 
         if (syscall != null) {
-            try syscall.?.handle(&process);
+            try syscall.?.handle(process);
         }
     }
 }

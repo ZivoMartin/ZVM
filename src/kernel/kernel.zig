@@ -40,7 +40,8 @@ pub const KernelInterface = struct {
     }
 
     pub fn give_command(self: *Self, path: []u8) !void {
-        try self.dis_sender.send(try Distributer.Message.newProcess(&self.allocator, path));
+        const elt = try Distributer.Message.newProcess(self.allocator, path);
+        try self.dis_sender.send(elt);
     }
 
     pub fn deinit(self: *Self) !void {

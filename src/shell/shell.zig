@@ -102,8 +102,10 @@ const UI = struct {
         var len: usize = 0;
         while (len < TERM_WIDTH and self.terminal[len][y] != 0) : (len += 1) {}
         const line = try self.kernel.allocator.alloc(u8, len);
+        defer self.kernel.allocator.free(line);
         for (0..len) |i| line[i] = self.terminal[i][y];
         const tree = try parser.parse(&self.kernel.allocator, &line);
+        defer tree.destroy(&self.kernel.allocator);
         tree.display();
         try command_evaluator.evaluate(self.kernel, tree);
     }

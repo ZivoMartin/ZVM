@@ -63,6 +63,16 @@ pub const CommandTree = struct {
         return res;
     }
 
+    pub fn destroy(self: *CommandTree, allocator: *const std.mem.Allocator) void {
+        if (self.right != null) {
+            self.right.?.destroy(allocator);
+        }
+        if (self.left != null) {
+            self.left.?.destroy(allocator);
+        }
+        allocator.destroy(self);
+    }
+
     fn new_from_op(self: *CommandTree, allocator: *const std.mem.Allocator, op: OP) !*CommandTree {
         const res = try new(allocator);
         res.content = .{ .operator = op };

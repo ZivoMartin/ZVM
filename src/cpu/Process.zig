@@ -1,7 +1,7 @@
 const std = @import("std");
 
-const memory = @import("memory.zig");
-const PROCESS_MEM_SIZE = memory.PROCESS_MEM_SIZE;
+const Memory = @import("Memory.zig");
+const PROCESS_MEM_SIZE = Memory.PROCESS_MEM_SIZE;
 const utils = @import("utils.zig");
 const instructions = @import("instructions.zig");
 const Instruction = instructions.Instruction;
@@ -18,9 +18,16 @@ pub const Process = struct {
     code_size: usize = 0,
     stack_pointer: usize = STACK_ADDRESS,
     running: bool = true,
+    allocator: std.mem.Allocator,
 
-    pub fn new(process_memory: *[PROCESS_MEM_SIZE]u8) !Process {
-        return Process{ .process_memory = process_memory };
+    pub fn new(allocator: std.mem.Allocator, process_memory: *[PROCESS_MEM_SIZE]u8) !*Process {
+        const p = try allocator.create(Process);
+        p.process_memory = process_memory;
+        p.allocator = allocator;
+        p.code_size = 0;
+        p.stack_pointer = STACK_ADDRESS;
+        p.running = true;
+        return p;
     }
 
     pub fn begin(_: *const Process) void {
@@ -28,31 +35,31 @@ pub const Process = struct {
         Reg.PC.set(0);
     }
 
-    fn getProgramOrigin(_: std.fs.File) !memory.ADDRESS {
+    fn getProgramOrigin(_: std.fs.File) !Memory.ADDRESS {
         return 0;
     }
 
-    pub fn readu32(self: *const Process, i: memory.ADDRESS) !u32 {
+    pub fn readu32(self: *const Process, i: Memory.ADDRESS) !u32 {
         if (i < self.code_size) return ProcessError.CodeReading;
         return utils.read_u32(.{ self.process_memory[i], self.process_memory[i + 1], self.process_memory[i + 2], self.process_memory[i + 3] });
     }
 
-    pub fn writeu32(self: *Process, i: memory.ADDRESS, x: u32) !void {
+    pub fn writeu32(self: *Process, i: Memory.ADDRESS, x: u32) !void {
         if (i < self.code_size) return ProcessError.CodeWriting;
         const buffer: [4]u8 = utils.u32_bytes(x);
         self.force_write(i, &buffer);
     }
 
-    pub fn read(self: *const Process, i: memory.ADDRESS) !u8 {
+    pub fn read(self: *const Process, i: Memory.ADDRESS) !u8 {
         return self.process_memory.*[@intCast(i)];
     }
 
-    pub fn write(self: *Process, i: memory.ADDRESS, x: u8) !void {
+    pub fn write(self: *Process, i: Memory.ADDRESS, x: u8) !void {
         if (i < self.code_size) return ProcessError.CodeWriting;
         self.process_memory[i] = x;
     }
 
-    fn force_write(self: *Process, i: memory.ADDRESS, x: *const [4]u8) void {
+    fn force_write(self: *Process, i: Memory.ADDRESS, x: *const [4]u8) void {
         for (0..4) |k| self.process_memory.*[@intCast(i + k)] = x.*[k];
     }
 
@@ -93,7 +100,7 @@ pub const Process = struct {
         return res;
     }
 
-    pub fn setup_memory(self: *Process, image_path: [:0]const u8) !void {
+    pub fn setup_memory(self: *Process, image_path: []const u8) !void {
         const file = try std.fs.cwd().openFile(image_path, .{});
         defer file.close();
         const origin = try getProgramOrigin(file);
@@ -111,20 +118,20 @@ pub const Process = struct {
     pub fn next_instruction(self: *Process) !?Syscall {
         const instr = try self.read_instruction();
         const op: instructions.OP = @enumFromInt(instr >> 27);
-        std.debug.print("{}\n", .{op});
+        // std.debug.print("{}\n", .{op});
         try op.handle_instruction(instr, self);
         return op.get_syscall();
     }
 };
 
 test "write_read_u32" {
-    var process = try Process.new(try memory.get_process_mem_space());
+    var process = try Process.new(try Memory.get_process_mem_space());
     try process.writeu32(10, 30);
     try std.testing.expect(try process.readu32(10) == 30);
 }
 
 test "Process.next_instruction" {
-    var process = try Process.new(try memory.get_process_mem_space());
+    var process = try Process.new(try Memory.get_process_mem_space());
     process.write_instruction(0b10010_000_1_00000000000000000101010);
     process.write_instruction(0b10010_001_1_00000000000000000000001);
     process.write_instruction(0b00000_000_001_0_00000000000000000_000);
@@ -132,5 +139,5 @@ test "Process.next_instruction" {
     for (0..3) |_| _ = try process.next_instruction();
     try std.testing.expect(Reg.R0.get() == 43);
     Reg.clear();
-    memory.reset();
+    Memory.reset();
 }

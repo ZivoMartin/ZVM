@@ -1,4 +1,4 @@
-const memory = @import("memory.zig");
+const Memory = @import("Memory.zig");
 const utils = @import("utils.zig");
 const image_reader = @import("Process.zig");
 const registers = @import("registers.zig");
@@ -26,7 +26,7 @@ pub const TR = enum(u16) {
             .PUTS => {
                 var addr = Reg.R0.get();
                 while (true) : (addr += 1) {
-                    const c = try memory.read(addr);
+                    const c = try Memory.read(addr);
                     if (c == 0) {
                         break;
                     }
@@ -41,7 +41,7 @@ pub const TR = enum(u16) {
             .PUTSP => {
                 var addr = Reg.R0.get();
                 while (true) : (addr += 1) {
-                    const cs = try memory.read(addr);
+                    const cs = try Memory.read(addr);
                     if (cs == 0) break;
                     const c1 = cs & 0xFF;
                     const c2 = cs >> 8;

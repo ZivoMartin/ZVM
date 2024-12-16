@@ -13,6 +13,7 @@ pub const Syscall = enum(u8) {
 
     fn write_stdout(process: *Process) !void {
         var addr = Reg.R1.get();
+        std.debug.print("{}\n", .{addr});
         const writer = stdout.writer();
         while (true) : (addr += 1) {
             const c = try process.read(@truncate(addr));
