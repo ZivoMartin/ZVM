@@ -3,7 +3,7 @@ const registers = @import("registers.zig");
 const memory = @import("memory.zig");
 const traps = @import("traps.zig");
 const std = @import("std");
-const _process = @import("process.zig");
+const _process = @import("Process.zig");
 const Process = _process.Process;
 const Syscall = @import("../kernel/syscall.zig").Syscall;
 

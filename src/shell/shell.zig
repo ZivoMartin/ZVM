@@ -4,6 +4,8 @@ const sdl = @cImport({
     @cInclude("SDL2/SDL_image.h");
     @cInclude("SDL_ttf.h");
 });
+const KernelInterface = @import("../kernel/kernel.zig").KernelInterface;
+
 const parser = @import("parser.zig");
 const command_evaluator = @import("command_evaluator.zig");
 
@@ -28,11 +30,11 @@ const UI = struct {
     running: bool,
     cursor: Vec2,
     now: usize,
-
+    kernel: *KernelInterface,
     terminal: [WIDTH][HEIGHT]u8,
     font: [NB_CHAR]*sdl.SDL_Texture,
 
-    fn new(allocator: *const std.mem.Allocator) !*UI {
+    fn new(kernel: *KernelInterface) !*UI {
         if (sdl.SDL_Init(sdl.SDL_INIT_VIDEO) != 0) {
             sdl.SDL_Log("Unable to initialize SDL: %s", sdl.SDL_GetError());
             return error.SDLInitializationFailed;
@@ -46,7 +48,8 @@ const UI = struct {
             return error.SDLInitializationFailed;
         };
 
-        var ui = try allocator.create(UI);
+        var ui = try kernel.allocator.create(UI);
+        ui.kernel = kernel;
         ui.running = true;
         ui.now = 0;
         ui.window = window;
@@ -95,18 +98,14 @@ const UI = struct {
     }
 
     fn execute_command(self: *UI) !void {
-        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-        defer arena.deinit();
-        const allocator = arena.allocator();
-
         const y: usize = @intCast(self.cursor.y);
         var len: usize = 0;
         while (len < TERM_WIDTH and self.terminal[len][y] != 0) : (len += 1) {}
-        const line = try allocator.alloc(u8, len);
+        const line = try self.kernel.allocator.alloc(u8, len);
         for (0..len) |i| line[i] = self.terminal[i][y];
-        const tree = try parser.parse(&allocator, &line);
+        const tree = try parser.parse(&self.kernel.allocator, &line);
         tree.display();
-        try command_evaluator.evaluate(tree);
+        try command_evaluator.evaluate(self.kernel, tree);
     }
 
     fn ret(self: *UI) !void {
@@ -196,12 +195,8 @@ const UI = struct {
     }
 };
 
-pub fn run() !void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    var ui = try UI.new(&allocator);
+pub fn run(kernel: *KernelInterface) !void {
+    var ui = try UI.new(kernel);
     defer ui.destroy();
 
     var event: sdl.SDL_Event = undefined;

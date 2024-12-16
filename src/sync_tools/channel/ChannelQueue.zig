@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub const ChannelQueueError = error{ QueueIsEmpty, QueueIsFull };
+pub const ChannelQueueError = error{ QueueIsEmpty, QueueIsFull, ChannelClosed };
 
 pub fn ChannelQueue(comptime T: type, size: usize) type {
     return struct {
@@ -14,8 +14,12 @@ pub fn ChannelQueue(comptime T: type, size: usize) type {
         start: usize,
         end: usize,
         len: usize,
+        closed: bool,
 
         pub fn recv(self: *Self) !T {
+            if (self.closed) {
+                return ChannelQueueError.ChannelClosed;
+            }
             var res: T = undefined;
             {
                 self.mutex.lock();
@@ -32,6 +36,9 @@ pub fn ChannelQueue(comptime T: type, size: usize) type {
         }
 
         pub fn send(self: *Self, elt: T) !void {
+            if (self.closed) {
+                return ChannelQueueError.ChannelClosed;
+            }
             {
                 self.mutex.lock();
                 defer self.mutex.unlock();
@@ -53,14 +60,14 @@ pub fn ChannelQueue(comptime T: type, size: usize) type {
             return self.len == self.buffer.len;
         }
 
-        pub fn peek(self: *Self) !*T {
+        fn peek(self: *Self) !*T {
             if (self.is_empty()) {
                 return ChannelQueueError.QueueIsEmpty;
             }
             return &self.buffer.*[self.start];
         }
 
-        pub fn dequeue(self: *Self) !T {
+        fn dequeue(self: *Self) !T {
             if (self.is_empty()) {
                 return ChannelQueueError.QueueIsEmpty;
             }
@@ -70,7 +77,7 @@ pub fn ChannelQueue(comptime T: type, size: usize) type {
             return res;
         }
 
-        pub fn unqueue(self: *Self, elt: T) !void {
+        fn unqueue(self: *Self, elt: T) !void {
             if (self.is_full()) {
                 return ChannelQueueError.QueueIsFull;
             }
@@ -85,6 +92,7 @@ pub fn ChannelQueue(comptime T: type, size: usize) type {
             self.alloc = alloc;
             self.len = 0;
             self.start = 0;
+            self.closed = false;
             self.end = 0;
             self.mutex = std.Thread.Mutex{};
             self.unqueue_cond = std.Thread.Condition{};
@@ -93,13 +101,13 @@ pub fn ChannelQueue(comptime T: type, size: usize) type {
         }
 
         pub fn deinit(self: *Self) void {
-            self.alloc.free(self.buffer);
-            self.* = undefined;
+            self.alloc.destroy(self.buffer);
+            self.closed = true;
         }
     };
 }
 
-fn receiver(queue: *ChannelQueue(u32, 3)) !void {
+fn test_receiver(queue: *ChannelQueue(u32, 3)) !void {
     try std.testing.expect(try queue.recv() == 1);
     try std.testing.expect(try queue.recv() == 2);
 }
@@ -110,7 +118,7 @@ test "UnqueuDequeue" {
     var queue = try ChannelQueue(u32, 3).init(arena.allocator());
     defer queue.deinit();
 
-    var t = try std.Thread.spawn(.{}, receiver, .{queue});
+    var t = try std.Thread.spawn(.{}, test_receiver, .{queue});
 
     try queue.send(1);
     try queue.send(2);

@@ -1,21 +1,20 @@
 const std = @import("std");
-const Channel = @import("../sync_tools/channel/Channel.zig").Channel;
+const Ch = @import("../sync_tools/Channel.zig");
+const Distributer = @import("Distributer.zig").Distributer;
+
 const Thread = std.Thread;
 
 pub const Kernel = struct {
-    arena: std.heap.ArenaAllocator,
+    allocator: std.mem.Allocator,
 
-    pub fn new() !KernelInterface {
-        var kernel = ProtectedKernel.new(Kernel{ .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator) });
+    pub fn new(allocator: std.mem.Allocator) !KernelInterface {
+        var kernel = ProtectedKernel.new(Kernel{ .allocator = allocator });
+        const sender = try Distributer.init(allocator);
 
-        _ = try Channel(u32, 10).init(kernel.new_allocator());
-
-        return KernelInterface.new(kernel.new_allocator());
+        return KernelInterface.new(kernel.allocator(), sender);
     }
 
-    pub fn deinit(self: *Kernel) void {
-        self.arena.deinit();
-    }
+    pub fn deinit(_: *Kernel) void {}
 };
 
 pub const ProtectedKernel = struct {
@@ -25,17 +24,27 @@ pub const ProtectedKernel = struct {
         return ProtectedKernel{ .kernel = kernel, .mutex = Thread.Mutex{} };
     }
 
-    fn new_allocator(self: *ProtectedKernel) std.mem.Allocator {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-        return self.kernel.arena.allocator();
+    fn allocator(self: *const ProtectedKernel) std.mem.Allocator {
+        return self.kernel.allocator;
     }
 };
 
 pub const KernelInterface = struct {
-    allocator: std.mem.Allocator,
+    const Self = @This();
 
-    fn new(allocator: std.mem.Allocator) KernelInterface {
-        return KernelInterface{ .allocator = allocator };
+    allocator: std.mem.Allocator,
+    dis_sender: *Distributer.MessageSender,
+
+    fn new(allocator: std.mem.Allocator, sender: *Distributer.MessageSender) KernelInterface {
+        return KernelInterface{ .allocator = allocator, .dis_sender = sender };
+    }
+
+    pub fn give_command(self: *Self, path: []u8) !void {
+        try self.dis_sender.send(try Distributer.Message.newProcess(&self.allocator, path));
+    }
+
+    pub fn deinit(self: *Self) !void {
+        try self.dis_sender.deinit();
+        self.* = undefined;
     }
 };

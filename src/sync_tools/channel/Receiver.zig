@@ -14,20 +14,25 @@ pub fn Receiver(comptime T: type, size: usize) type {
 
         nb_sender: usize = 1,
 
-        pub fn init(alloc: std.mem.Allocator, queue: *Queue(Message(T), size)) Self {
-            return Self{ .alloc = alloc, .queue = queue };
+        pub fn init(alloc: std.mem.Allocator, queue: *Queue(Message(T), size)) !*Self {
+            var res = try alloc.create(Self);
+            res.alloc = alloc;
+            res.queue = queue;
+            res.nb_sender = 1;
+            return res;
         }
 
         pub fn recv(self: *Self) !T {
-            const message = self.queue.recv();
+            const message = try self.queue.recv();
             switch (message) {
                 .elt => |value| return value,
                 .sender_warning => |warn| {
                     switch (warn) {
-                        .NewSender => self.sender += 1,
+                        .NewSender => self.nb_sender += 1,
                         .ImClosed => {
                             self.nb_sender -= 1;
                             if (self.nb_sender == 0) {
+                                self.deinit();
                                 return ReceiverError.ReceiverIsClosed;
                             }
                         },
@@ -37,10 +42,10 @@ pub fn Receiver(comptime T: type, size: usize) type {
             }
         }
 
-        pub fn deinit(self: *Self) !void {
-            try self.queue.deinit();
-            try self.alloc.free(self.queue);
-            self.* = undefined;
+        pub fn deinit(self: *Self) void {
+            self.queue.deinit();
+            self.alloc.destroy(self.queue);
+            self.alloc.destroy(self);
         }
     };
 }

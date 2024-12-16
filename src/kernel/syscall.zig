@@ -1,4 +1,4 @@
-const Process = @import("../cpu/process.zig").Process;
+const Process = @import("../cpu/Process.zig").Process;
 const Reg = @import("../cpu/registers.zig").Reg;
 const stdout = @import("../cpu/utils.zig").stdout;
 const std = @import("std");

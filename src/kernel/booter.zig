@@ -1,13 +1,16 @@
 const std = @import("std");
-const Process = @import("../cpu/process.zig").Process;
+const Process = @import("../cpu/Process.zig").Process;
 const shell = @import("../shell/shell.zig");
 const Reg = @import("../cpu/registers.zig").Reg;
 const memory = @import("../cpu/memory.zig");
 const Kernel = @import("kernel.zig").Kernel;
 
 fn shell_boot() !void {
-    _ = try Kernel.new();
-    try shell.run();
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    // defer arena.deinit();
+    var kernel = try Kernel.new(arena.allocator());
+    try shell.run(&kernel);
+    try kernel.deinit();
 }
 
 fn testing_boot(path: [:0]const u8) !void {
