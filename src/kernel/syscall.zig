@@ -7,6 +7,9 @@ const sdl = @cImport({
     @cInclude("SDL2/SDL_image.h");
     @cInclude("SDL_ttf.h");
 });
+const Shell = @import("../shell/shell.zig");
+const Ch = @import("../sync_tools/Channel.zig");
+const Distributer = @import("Distributer.zig").Distributer;
 
 pub const Syscall = enum(u8) {
     Halt,
@@ -17,22 +20,18 @@ pub const Syscall = enum(u8) {
         process.*.running = false;
     }
 
-    fn write_stdout(process: *Process) !void {
-        var addr = Reg.R1.get();
-        const writer = stdout.writer();
-        while (true) : (addr += 1) {
-            const c = process.read(@truncate(addr));
-            if (c == 0) {
-                break;
-            }
-            try writer.writeByte(c);
+    fn write_stdout(shell_sender: ?*Shell.ShellSender, alloc: std.mem.Allocator, process: *Process) !void {
+        if (shell_sender != null) {
+            const addr = Reg.R1.get();
+            const s = process.mem_read(@truncate(addr));
+            try shell_sender.?.send(try Shell.ShellMessage.newStdout(alloc, s));
         }
     }
 
-    pub fn handle(self: Syscall, process: *Process) !void {
+    pub fn handle(self: Syscall, dis: *Distributer, process: *Process) !void {
         switch (self) {
             .Halt => halt(process),
-            .WriteStdOut => try write_stdout(process),
+            .WriteStdOut => try write_stdout(dis.shell_sender, dis.alloc, process),
             .GetC => {},
         }
     }

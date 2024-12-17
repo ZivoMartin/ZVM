@@ -28,12 +28,61 @@ const WIDTH = TERM_WIDTH * TILE_WIDTH;
 
 const NB_CHAR = 173;
 
+const Color = enum(u8) {
+    Black = 0x0,
+    Red = 0x1,
+
+    fn get_sdl_color(self: Color) sdl.SDL_Color {
+        return switch (self) {
+            .Black => sdl.SDL_Color{ .r = 0, .g = 0, .b = 0 },
+            .Red => sdl.SDL_Color{ .r = 180, .g = 0, .b = 0 },
+        };
+    }
+};
+
 const Square = struct {
     char: u8,
     writable: bool,
+    color: Color,
 
     fn Default() Square {
-        return Square{ .char = 0, .writable = true };
+        return Square{ .char = 0, .writable = true, .color = Color.Black };
+    }
+};
+
+const Letter = struct {
+    const NB_COLOR = @typeInfo(Color).@"enum".fields.len;
+
+    colors: [NB_COLOR]?*sdl.SDL_Texture,
+
+    fn new(font: ?*sdl.TTF_Font, renderer: ?*sdl.SDL_Renderer, l: u8) !Letter {
+        const txt_arr: [2]u8 = .{ @intCast(l), 0 };
+        const txt: [*c]const u8 = &txt_arr;
+
+        var letter = Letter{ .colors = .{null} ** NB_COLOR };
+
+        for (0..@typeInfo(Color).@"enum".fields.len) |i| {
+            const color: Color = @enumFromInt(i);
+            const surf: *sdl.SDL_Surface = sdl.TTF_RenderText_Blended(font, txt, color.get_sdl_color()) orelse {
+                sdl.SDL_Log("Unable to load letter: %d, %s", l, sdl.SDL_GetError());
+                return error.SDLInitializationFailed;
+            };
+            defer sdl.SDL_FreeSurface(surf);
+
+            letter.colors[i] = sdl.SDL_CreateTextureFromSurface(renderer, surf) orelse {
+                sdl.SDL_Log("Unable to create texture from surface for letter: %d, %s", l, sdl.SDL_GetError());
+                return error.SDLInitializationFailed;
+            };
+        }
+        return letter;
+    }
+
+    fn destroy(self: *const Letter) void {
+        for (self.colors) |c| sdl.SDL_DestroyTexture(c);
+    }
+
+    fn get(self: Letter, color: Color) ?*sdl.SDL_Texture {
+        return self.colors[@intFromEnum(color)];
     }
 };
 
@@ -45,8 +94,9 @@ const UI = struct {
     now: usize,
     kernel: *KernelInterface,
     terminal: [WIDTH][HEIGHT]Square,
-    font: [NB_CHAR]*sdl.SDL_Texture,
+    font: [NB_CHAR]Letter,
     executable: bool,
+    current_color: Color,
     mutex: std.Thread.Mutex,
 
     fn new(kernel: *KernelInterface) !*UI {
@@ -71,13 +121,17 @@ const UI = struct {
         ui.renderer = renderer;
         ui.cursor = Vec2.zero();
         ui.executable = true;
+        ui.current_color = Color.Black;
 
         for (0..TERM_WIDTH) |i| {
             for (0..TERM_HEIGHT) |j|
                 ui.terminal[i][j] = Square.Default();
         }
+
         try ui.init_font();
+
         ui.write_prompt();
+
         return ui;
     }
 
@@ -94,28 +148,18 @@ const UI = struct {
         sdl.TTF_SetFontStyle(font, sdl.TTF_STYLE_NORMAL);
 
         for (1..NB_CHAR) |i| {
-            const txt_arr: [2]u8 = .{ @intCast(i), 0 };
-            const txt: [*c]const u8 = &txt_arr;
-            const surf: *sdl.SDL_Surface = sdl.TTF_RenderText_Blended(font, txt, sdl.SDL_Color{ .r = 0, .g = 0, .b = 0 }) orelse {
-                sdl.SDL_Log("Unable to load letter: %d, %s", i, sdl.SDL_GetError());
-                return error.SDLInitializationFailed;
-            };
-            self.font[i] = sdl.SDL_CreateTextureFromSurface(self.renderer, surf) orelse {
-                sdl.SDL_Log("Unable to create texture from surface for letter: %d, %s", i, sdl.SDL_GetError());
-                return error.SDLInitializationFailed;
-            };
-            sdl.SDL_FreeSurface(surf);
+            self.font[i] = try Letter.new(font, self.renderer, @intCast(i));
         }
+        sdl.TTF_CloseFont(font);
     }
 
     fn destroy(self: *UI) void {
         sdl.SDL_DestroyRenderer(self.renderer);
         sdl.SDL_DestroyWindow(self.window);
-        for (self.font[1..]) |letter| sdl.SDL_DestroyTexture(letter);
+        for (self.font[1..]) |letter| letter.destroy();
     }
 
-    fn execute_command(self: *UI) !void {
-        self.executable = false;
+    fn execute_command(self: *UI) !bool {
         const y: usize = @intCast(self.cursor.y);
         var len: usize = 0;
         var ind: usize = 0;
@@ -126,22 +170,24 @@ const UI = struct {
         defer self.kernel.allocator.free(line);
         var j: usize = 0;
         for (0..TILE_WIDTH) |i| {
+            if (j == len) break;
             if (self.terminal[i][y].writable) {
                 line[j] = self.terminal[i][y].char;
                 j += 1;
-                if (j == len) break;
             }
         }
         const tree = try parser.parse(&self.kernel.allocator, &line);
         defer tree.destroy(&self.kernel.allocator);
         tree.display();
-        try command_evaluator.evaluate(self.kernel, tree);
+        if (!tree.is_empty()) {
+            try command_evaluator.evaluate(self.kernel, tree);
+            self.executable = false;
+        }
+        return tree.is_empty();
     }
 
     fn ret(self: *UI) !void {
-        if (self.executable) {
-            try self.execute_command();
-        }
+        const write_p = self.executable and try self.execute_command();
         if (self.cursor.y != TERM_HEIGHT - 1) {
             self.cursor = Vec2.new(0, self.cursor.y + 1);
         } else {
@@ -155,6 +201,7 @@ const UI = struct {
             }
             self.cursor.x = 0;
         }
+        if (write_p) self.write_prompt();
     }
 
     fn del(self: *UI) void {
@@ -163,19 +210,30 @@ const UI = struct {
         self.move_cursor_left();
     }
 
-    fn write(self: *UI, char: u8) void {
-        if (char >= NB_CHAR) return;
-        self.terminal[@intCast(self.cursor.x)][@intCast(self.cursor.y)].char = char;
-        self.move_cursor_right();
+    fn write(self: *UI, char: u8) !void {
+        if (char >= NB_CHAR or char == 0) return;
+        switch (char) {
+            '\n' => {
+                try self.ret();
+            },
+            else => {
+                self.terminal[@intCast(self.cursor.x)][@intCast(self.cursor.y)].char = char;
+                self.terminal[@intCast(self.cursor.x)][@intCast(self.cursor.y)].color = self.current_color;
+                self.move_cursor_right();
+            },
+        }
     }
 
     fn write_prompt(self: *UI) void {
-        self.write_string(PROMPT);
+        self.write_string(PROMPT) catch {
+            std.debug.print("WARNING: FAILED TO WRITE PROMPT\n", .{});
+            return;
+        };
         for (0..PROMPT.len) |i| self.terminal[i][@intCast(self.cursor.y)].writable = false;
     }
 
-    fn write_string(self: *UI, s: []const u8) void {
-        for (s) |c| self.write(c);
+    fn write_string(self: *UI, s: []const u8) !void {
+        for (s) |c| try self.write(c);
     }
 
     fn move_cursor_left(self: *UI) void {
@@ -203,25 +261,28 @@ const UI = struct {
 
     fn display(self: *UI) !void {
         self.mutex.lock();
+
         defer self.mutex.unlock();
-        for (self.terminal, 0..) |line, i| {
-            for (line, 0..) |c, j| {
+
+        for (0..TERM_WIDTH) |i| {
+            for (0..TERM_HEIGHT) |j| {
+                const c = self.terminal[i][j];
                 if (c.char == 0) continue;
                 const pos = get_terminal_position(i, j);
                 const r = sdl.SDL_Rect{ .h = TILE_HEIGHT, .w = TILE_WIDTH, .x = pos.x, .y = pos.y };
-                if (sdl.SDL_RenderCopy(self.renderer, self.font[c.char], null, &r) != 0) {
+                if (sdl.SDL_RenderCopy(self.renderer, self.font[c.char].get(c.color), null, &r) != 0) {
                     sdl.SDL_Log("Failed to display: %s", sdl.SDL_GetError());
                     return error.SDLInitializationFailed;
                 }
             }
         }
-        if (self.now % 40 < 20) try self.display_cursor();
+        if (self.now % 1600 < 800) try self.display_cursor();
     }
 
     fn handle_event(self: *UI, event: *sdl.SDL_Event) !void {
         switch (event.type) {
             sdl.SDL_QUIT => self.running = false,
-            sdl.SDL_TEXTINPUT => self.write(@intCast(event.text.text[0])),
+            sdl.SDL_TEXTINPUT => try self.write(@intCast(event.text.text[0])),
             sdl.SDL_KEYDOWN => {
                 switch (event.key.keysym.sym) {
                     sdl.SDLK_BACKSPACE => self.del(),
@@ -237,19 +298,19 @@ const UI = struct {
 pub const ShellMessage = struct {
     alloc: std.mem.Allocator,
     content: union(enum) {
-        Stdout: []u8,
-        Stderr: []u8,
+        Stdout: []const u8,
+        Stderr: []const u8,
         ProcessEnded: u1,
     },
 
-    pub fn newStdout(alloc: std.mem.Allocator, content: []u8) !*ShellMessage {
+    pub fn newStdout(alloc: std.mem.Allocator, content: []const u8) !*ShellMessage {
         const self = try alloc.create(ShellMessage);
         self.alloc = alloc;
         self.content = .{ .Stdout = content };
         return self;
     }
 
-    pub fn newStderr(alloc: std.mem.Allocator, content: []u8) !*ShellMessage {
+    pub fn newStderr(alloc: std.mem.Allocator, content: []const u8) !*ShellMessage {
         const self = try alloc.create(ShellMessage);
         self.alloc = alloc;
         self.content = .{ .Stderr = content };
@@ -276,8 +337,14 @@ pub fn shell_messages_receiver(ui: *UI) !void {
         ui.mutex.lock();
         defer ui.mutex.unlock();
         switch (msg.content) {
-            .Stdout => |_| {},
-            .Stderr => |_| {},
+            .Stdout => |s| {
+                try ui.write_string(s);
+            },
+            .Stderr => |s| {
+                ui.current_color = Color.Red;
+                try ui.write_string(s);
+                ui.current_color = Color.Black;
+            },
             .ProcessEnded => |_| {
                 ui.write_prompt();
                 ui.executable = true;

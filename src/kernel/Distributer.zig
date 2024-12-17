@@ -6,6 +6,8 @@ const ProcessExecutionTime: u64 = 10_000_000; // in nanoseconde (10 ms)
 const Memory = @import("../cpu/Memory.zig");
 const Shell = @import("../shell/shell.zig");
 
+const FILE_NOT_FOUND_ERR = "File not found: ";
+
 const PATH = "/home/martin/Travail/Nuzima/";
 
 pub const Distributer = struct {
@@ -46,7 +48,26 @@ pub const Distributer = struct {
         }
     };
 
-    fn create_process(self: *Self, path: []u8) !void {
+    fn file_not_found(self: *Self, path: []const u8) !void {
+        if (self.shell_sender != null) {
+            const len = FILE_NOT_FOUND_ERR.len + path.len + 1;
+            const err = try self.alloc.alloc(u8, len);
+            var i: usize = 0;
+            for (FILE_NOT_FOUND_ERR) |c| {
+                err[i] = c;
+                i += 1;
+            }
+            for (path) |c| {
+                err[i] = c;
+                i += 1;
+            }
+            err[i] = '\n';
+            try self.shell_sender.?.send(try Shell.ShellMessage.newStderr(self.alloc, err));
+            try self.shell_sender.?.send(try Shell.ShellMessage.newProcessEnded(self.alloc));
+        }
+    }
+
+    fn create_process(self: *Self, path: []const u8) !void {
         {
             self.mutex.lock();
             defer self.mutex.unlock();
@@ -59,6 +80,7 @@ pub const Distributer = struct {
 
             var process = try Process.new(self.alloc, try Memory.get_process_mem_space());
             process.setup_memory(abs_path) catch {
+                try self.file_not_found(path);
                 return;
             };
             try self.process_list.append(process);
@@ -103,7 +125,7 @@ pub const Distributer = struct {
             while (timer.read() < ProcessExecutionTime) {
                 const syscall = try process.next_instruction();
                 if (syscall != null) {
-                    try syscall.?.handle(process);
+                    try syscall.?.handle(self, process);
                 }
                 if (!process.running) {
                     if (self.shell_sender != null) {

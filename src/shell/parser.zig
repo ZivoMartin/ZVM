@@ -103,9 +103,20 @@ pub const CommandTree = struct {
         }
     }
 
+    pub fn is_empty(self: *CommandTree) bool {
+        switch (self.content) {
+            .empty => return true,
+            else => return false,
+        }
+    }
+
     pub fn display(self: *CommandTree) void {
-        self.display_helper();
-        std.debug.print("\n", .{});
+        if (self.is_empty()) {
+            std.debug.print("Empty Tree\n", .{});
+        } else {
+            self.display_helper();
+            std.debug.print("\n", .{});
+        }
     }
 
     fn display_helper(self: *CommandTree) void {
