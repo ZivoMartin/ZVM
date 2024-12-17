@@ -1,5 +1,5 @@
 const Memory = @import("Memory.zig");
-const utils = @import("utils.zig");
+const utils = @import("../utils.zig");
 const image_reader = @import("Process.zig");
 const registers = @import("registers.zig");
 const Reg = registers.Reg;

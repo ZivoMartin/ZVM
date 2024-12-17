@@ -1,6 +1,6 @@
 const std = @import("std");
 const Instruction = @import("instructions.zig").Instruction;
-const utils = @import("utils.zig");
+const utils = @import("../utils.zig");
 const Reg = @import("registers.zig").Reg;
 
 pub const ContextSaver = struct {

@@ -2,7 +2,7 @@ const std = @import("std");
 
 const Memory = @import("Memory.zig");
 const PROCESS_MEM_SIZE = Memory.PROCESS_MEM_SIZE;
-const utils = @import("utils.zig");
+const utils = @import("../utils.zig");
 const instructions = @import("instructions.zig");
 const Instruction = instructions.Instruction;
 const InstructionSize = instructions.InstructionSize;

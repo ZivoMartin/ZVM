@@ -19,6 +19,7 @@ pub fn read_u32(buff: [4]u8) u32 {
         (@as(u32, buff[2]) << 8) |
         @as(u32, buff[3]);
 }
+
 pub fn sign_extend(num: Instruction, comptime og_bits: u8) Instruction {
     if (og_bits == 0) {
         return 0;

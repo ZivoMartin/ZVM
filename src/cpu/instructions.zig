@@ -1,4 +1,4 @@
-const utils = @import("utils.zig");
+const utils = @import("../utils.zig");
 const registers = @import("registers.zig");
 const Memory = @import("Memory.zig");
 const traps = @import("traps.zig");
