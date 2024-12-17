@@ -1,6 +1,7 @@
 const std = @import("std");
 const Ch = @import("../sync_tools/Channel.zig");
 const Distributer = @import("Distributer.zig").Distributer;
+const Shell = @import("../shell/shell.zig");
 
 const Thread = std.Thread;
 
@@ -42,6 +43,11 @@ pub const KernelInterface = struct {
     pub fn give_command(self: *Self, path: []u8) !void {
         const elt = try Distributer.Message.newProcess(self.allocator, path);
         try self.dis_sender.send(elt);
+    }
+
+    pub fn give_shell_sender(self: *Self, sender: *Shell.ShellSender) !void {
+        const msg = try Distributer.Message.newShellSender(self.allocator, sender);
+        try self.dis_sender.send(msg);
     }
 
     pub fn deinit(self: *Self) !void {

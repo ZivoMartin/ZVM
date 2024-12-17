@@ -5,12 +5,16 @@ const sdl = @cImport({
     @cInclude("SDL_ttf.h");
 });
 const KernelInterface = @import("../kernel/kernel.zig").KernelInterface;
+const Ch = @import("../sync_tools/Channel.zig");
 
 const parser = @import("parser.zig");
 const command_evaluator = @import("command_evaluator.zig");
 
 const vec2 = @import("vec2.zig");
 const Vec2 = vec2.Vec2;
+
+const PROMPT = "[ZVM >] ";
+const LEFT_LIM = 0;
 
 const BASE_PADDING = 5;
 const TERM_WIDTH = 80;
@@ -24,6 +28,15 @@ const WIDTH = TERM_WIDTH * TILE_WIDTH;
 
 const NB_CHAR = 173;
 
+const Square = struct {
+    char: u8,
+    writable: bool,
+
+    fn Default() Square {
+        return Square{ .char = 0, .writable = true };
+    }
+};
+
 const UI = struct {
     window: *sdl.SDL_Window,
     renderer: *sdl.SDL_Renderer,
@@ -31,8 +44,10 @@ const UI = struct {
     cursor: Vec2,
     now: usize,
     kernel: *KernelInterface,
-    terminal: [WIDTH][HEIGHT]u8,
+    terminal: [WIDTH][HEIGHT]Square,
     font: [NB_CHAR]*sdl.SDL_Texture,
+    executable: bool,
+    mutex: std.Thread.Mutex,
 
     fn new(kernel: *KernelInterface) !*UI {
         if (sdl.SDL_Init(sdl.SDL_INIT_VIDEO) != 0) {
@@ -55,12 +70,14 @@ const UI = struct {
         ui.window = window;
         ui.renderer = renderer;
         ui.cursor = Vec2.zero();
+        ui.executable = true;
+
         for (0..TERM_WIDTH) |i| {
-            for (0..TERM_HEIGHT) |j| ui.terminal[i][j] = 0;
+            for (0..TERM_HEIGHT) |j|
+                ui.terminal[i][j] = Square.Default();
         }
-
         try ui.init_font();
-
+        ui.write_prompt();
         return ui;
     }
 
@@ -98,12 +115,23 @@ const UI = struct {
     }
 
     fn execute_command(self: *UI) !void {
+        self.executable = false;
         const y: usize = @intCast(self.cursor.y);
         var len: usize = 0;
-        while (len < TERM_WIDTH and self.terminal[len][y] != 0) : (len += 1) {}
+        var ind: usize = 0;
+        while (ind < TERM_WIDTH and self.terminal[ind][y].char != 0) : (ind += 1) {
+            if (self.terminal[ind][y].writable) len += 1;
+        }
         const line = try self.kernel.allocator.alloc(u8, len);
         defer self.kernel.allocator.free(line);
-        for (0..len) |i| line[i] = self.terminal[i][y];
+        var j: usize = 0;
+        for (0..TILE_WIDTH) |i| {
+            if (self.terminal[i][y].writable) {
+                line[j] = self.terminal[i][y].char;
+                j += 1;
+                if (j == len) break;
+            }
+        }
         const tree = try parser.parse(&self.kernel.allocator, &line);
         defer tree.destroy(&self.kernel.allocator);
         tree.display();
@@ -111,7 +139,9 @@ const UI = struct {
     }
 
     fn ret(self: *UI) !void {
-        try self.execute_command();
+        if (self.executable) {
+            try self.execute_command();
+        }
         if (self.cursor.y != TERM_HEIGHT - 1) {
             self.cursor = Vec2.new(0, self.cursor.y + 1);
         } else {
@@ -121,25 +151,30 @@ const UI = struct {
                 }
             }
             for (0..TERM_WIDTH) |i| {
-                self.terminal[i][TERM_HEIGHT - 1] = 0;
+                self.terminal[i][TERM_HEIGHT - 1] = Square.Default();
             }
             self.cursor.x = 0;
         }
     }
 
     fn del(self: *UI) void {
-        if (self.cursor.x == 0) return;
-        self.terminal[@intCast(self.cursor.x - 1)][@intCast(self.cursor.y)] = 0;
+        if (self.cursor.x == 0 or !self.terminal[@intCast(self.cursor.x - 1)][@intCast(self.cursor.y)].writable) return;
+        self.terminal[@intCast(self.cursor.x - 1)][@intCast(self.cursor.y)].char = 0;
         self.move_cursor_left();
     }
 
     fn write(self: *UI, char: u8) void {
         if (char >= NB_CHAR) return;
-        self.terminal[@intCast(self.cursor.x)][@intCast(self.cursor.y)] = char;
+        self.terminal[@intCast(self.cursor.x)][@intCast(self.cursor.y)].char = char;
         self.move_cursor_right();
     }
 
-    fn write_string(self: *UI, s: []u8) void {
+    fn write_prompt(self: *UI) void {
+        self.write_string(PROMPT);
+        for (0..PROMPT.len) |i| self.terminal[i][@intCast(self.cursor.y)].writable = false;
+    }
+
+    fn write_string(self: *UI, s: []const u8) void {
         for (s) |c| self.write(c);
     }
 
@@ -169,10 +204,10 @@ const UI = struct {
     fn display(self: *const UI) !void {
         for (self.terminal, 0..) |line, i| {
             for (line, 0..) |c, j| {
-                if (c == 0) continue;
+                if (c.char == 0) continue;
                 const pos = get_terminal_position(i, j);
                 const r = sdl.SDL_Rect{ .h = TILE_HEIGHT, .w = TILE_WIDTH, .x = pos.x, .y = pos.y };
-                if (sdl.SDL_RenderCopy(self.renderer, self.font[c], null, &r) != 0) {
+                if (sdl.SDL_RenderCopy(self.renderer, self.font[c.char], null, &r) != 0) {
                     sdl.SDL_Log("Failed to display: %s", sdl.SDL_GetError());
                     return error.SDLInitializationFailed;
                 }
@@ -197,20 +232,74 @@ const UI = struct {
     }
 };
 
+pub const ShellMessage = struct {
+    alloc: std.mem.Allocator,
+    content: union(enum) {
+        Stdout: []u8,
+        Stderr: []u8,
+        ProcessEnded: u1,
+    },
+
+    pub fn newStdout(alloc: std.mem.Allocator, content: []u8) !*ShellMessage {
+        const self = try alloc.create(ShellMessage);
+        self.alloc = alloc;
+        self.content = .{ .Stdout = content };
+        return self;
+    }
+
+    pub fn newStderr(alloc: std.mem.Allocator, content: []u8) !*ShellMessage {
+        const self = try alloc.create(ShellMessage);
+        self.alloc = alloc;
+        self.content = .{ .Stderr = content };
+        return self;
+    }
+
+    pub fn newProcessEnded(alloc: std.mem.Allocator) !*ShellMessage {
+        const self = try alloc.create(ShellMessage);
+        self.alloc = alloc;
+        self.content = .{ .ProcessEnded = 1 };
+        return self;
+    }
+};
+
+pub const ShellSender = Ch.Sender(*ShellMessage, 100);
+
+pub fn shell_messages_receiver(ui: *UI) !void {
+    const channel = try Ch.Channel(*ShellMessage, 100).init(ui.kernel.allocator);
+    try ui.kernel.give_shell_sender(channel.sender);
+    while (true) {
+        const msg = channel.receiver.recv() catch {
+            break;
+        };
+        ui.mutex.lock();
+        defer ui.mutex.unlock();
+        std.debug.print("OK\n", .{});
+        switch (msg.content) {
+            .Stdout => |_| {},
+            .Stderr => |_| {},
+            .ProcessEnded => |_| {
+                ui.write_prompt();
+                ui.executable = true;
+            },
+        }
+    }
+}
+
 pub fn run(kernel: *KernelInterface) !void {
     var ui = try UI.new(kernel);
     defer ui.destroy();
+    _ = try std.Thread.spawn(.{}, shell_messages_receiver, .{ui});
 
     var event: sdl.SDL_Event = undefined;
     while (ui.running) {
+        ui.mutex.lock();
         while (sdl.SDL_PollEvent(&event) != 0) try ui.handle_event(&event);
         try ui.display();
         sdl.SDL_RenderPresent(ui.renderer);
         _ = sdl.SDL_SetRenderDrawColor(ui.renderer, 0, 100, 0, 255);
         _ = sdl.SDL_RenderClear(ui.renderer);
-
-        _ = sdl.SDL_GetTicks();
-
         ui.now += 1;
+        ui.mutex.unlock();
+        _ = sdl.SDL_GetTicks();
     }
 }

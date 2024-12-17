@@ -4,6 +4,7 @@ const ChannelSize: usize = 100;
 const Process = @import("../cpu/Process.zig").Process;
 const ProcessExecutionTime: u64 = 10_000_000; // in nanoseconde (10 ms)
 const Memory = @import("../cpu/Memory.zig");
+const Shell = @import("../shell/shell.zig");
 
 const PATH = "/home/martin/Travail/Nuzima/";
 
@@ -15,25 +16,32 @@ pub const Distributer = struct {
     process_list: std.ArrayList(*Process),
     process_index: usize,
     new_process_cond: std.Thread.Condition,
+    shell_sender: ?*Shell.ShellSender,
 
     pub const MessageSender = Ch.Sender(*Message, ChannelSize);
 
     pub const Message = struct {
         alloc: std.mem.Allocator,
 
-        content: union(enum) {
-            new_process: []u8,
-        },
+        content: union(enum) { new_process: []u8, shell_sender: *Shell.ShellSender },
 
         pub fn newProcess(alloc: std.mem.Allocator, path: []u8) !*Message {
             const res = try alloc.create(Message);
             res.alloc = alloc;
-            res.content.new_process = path;
+            res.content = .{ .new_process = path };
+            return res;
+        }
+
+        pub fn newShellSender(alloc: std.mem.Allocator, shell_sender: *Shell.ShellSender) !*Message {
+            const res = try alloc.create(Message);
+            res.alloc = alloc;
+            res.content.shell_sender = shell_sender;
             return res;
         }
 
         pub fn deinit(self: *Message) void {
             self.alloc.destroy(self);
+
             self.* = undefined;
         }
     };
@@ -50,7 +58,9 @@ pub const Distributer = struct {
             for (0..path.len) |i| abs_path[PATH.len + i] = path[i];
 
             var process = try Process.new(self.alloc, try Memory.get_process_mem_space());
-            try process.setup_memory(abs_path);
+            process.setup_memory(abs_path) catch {
+                return;
+            };
             try self.process_list.append(process);
         }
         self.new_process_cond.signal();
@@ -66,6 +76,7 @@ pub const Distributer = struct {
             defer msg.deinit();
             switch (msg.content) {
                 .new_process => |path| try self.create_process(path),
+                .shell_sender => |sender| self.shell_sender = sender,
             }
         }
     }
@@ -89,13 +100,26 @@ pub const Distributer = struct {
             const process = self.get_next();
             process.restore_context();
             timer.reset();
-            while (timer.read() < ProcessExecutionTime and process.running) {
+            while (timer.read() < ProcessExecutionTime) {
                 const syscall = try process.next_instruction();
                 if (syscall != null) {
                     try syscall.?.handle(process);
                 }
+                if (!process.running) {
+                    if (self.shell_sender != null) {
+                        try self.shell_sender.?.send(try Shell.ShellMessage.newProcessEnded(self.alloc));
+                    }
+                    var i: usize = 0;
+                    while (self.process_list.items[i] != process) i += 1;
+                    _ = self.process_list.orderedRemove(i);
+                    break;
+                }
             }
-            process.save_context();
+            if (process.running) {
+                process.save_context();
+            } else {
+                process.deinit();
+            }
         }
     }
 
@@ -112,6 +136,10 @@ pub const Distributer = struct {
     }
 
     pub fn deinit(self: *Self) void {
+        if (self.shell_sender != null) {
+            self.shell_sender.deinit();
+        }
+
         self.list.deinit();
         self.alloc.destroy(self);
         self.* = undefined;

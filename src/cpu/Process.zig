@@ -37,6 +37,9 @@ pub const Process = struct {
         return p;
     }
 
+    /// TODO: Should call a memory function  to give to the next process the memory of this one
+    pub fn deinit(_: *Process) void {}
+
     pub fn restore_context(self: *Process) void {
         self.context_saver.restore_context();
     }
