@@ -201,7 +201,9 @@ const UI = struct {
         }
     }
 
-    fn display(self: *const UI) !void {
+    fn display(self: *UI) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
         for (self.terminal, 0..) |line, i| {
             for (line, 0..) |c, j| {
                 if (c.char == 0) continue;
@@ -273,7 +275,6 @@ pub fn shell_messages_receiver(ui: *UI) !void {
         };
         ui.mutex.lock();
         defer ui.mutex.unlock();
-        std.debug.print("OK\n", .{});
         switch (msg.content) {
             .Stdout => |_| {},
             .Stderr => |_| {},
@@ -292,14 +293,12 @@ pub fn run(kernel: *KernelInterface) !void {
 
     var event: sdl.SDL_Event = undefined;
     while (ui.running) {
-        ui.mutex.lock();
         while (sdl.SDL_PollEvent(&event) != 0) try ui.handle_event(&event);
         try ui.display();
         sdl.SDL_RenderPresent(ui.renderer);
         _ = sdl.SDL_SetRenderDrawColor(ui.renderer, 0, 100, 0, 255);
         _ = sdl.SDL_RenderClear(ui.renderer);
         ui.now += 1;
-        ui.mutex.unlock();
         _ = sdl.SDL_GetTicks();
     }
 }

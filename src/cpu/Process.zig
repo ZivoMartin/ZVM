@@ -155,7 +155,7 @@ pub const Process = struct {
     pub fn next_instruction(self: *Process) !?Syscall {
         const instr = try self.read_instruction();
         const op: instructions.OP = @enumFromInt(instr >> 27);
-        std.debug.print("{}\n", .{op});
+        // std.debug.print("{}\n", .{op});
         try op.handle_instruction(instr, self);
         return op.get_syscall();
     }
