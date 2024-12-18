@@ -1,6 +1,6 @@
 const Process = @import("../cpu/Process.zig").Process;
 const Reg = @import("../cpu/registers.zig").Reg;
-const stdout = @import("../cpu/utils.zig").stdout;
+const stdout = @import("../utils.zig").stdout;
 const std = @import("std");
 const sdl = @cImport({
     @cInclude("SDL2/SDL.h");

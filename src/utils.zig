@@ -2,7 +2,14 @@ const std = @import("std");
 const linux = std.os.linux;
 pub const stdin = std.io.getStdIn();
 pub const stdout = std.io.getStdOut();
-const Instruction = @import("instructions.zig").Instruction;
+const Instruction = @import("cpu/instructions.zig").Instruction;
+
+pub fn write_u32_bytes(buffer: *[4]u8, x: u32) void {
+    buffer.*[0] = @truncate(x >> 24);
+    buffer.*[1] = @truncate(x >> 16 & 0xFF);
+    buffer.*[2] = @truncate(x >> 8 & 0xFF);
+    buffer.*[3] = @truncate(x & 0xFF);
+}
 
 pub fn u32_bytes(x: u32) [4]u8 {
     return .{

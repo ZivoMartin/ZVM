@@ -5,6 +5,7 @@ const Process = @import("../cpu/Process.zig").Process;
 const ProcessExecutionTime: u64 = 10_000_000; // in nanoseconde (10 ms)
 const Memory = @import("../cpu/Memory.zig");
 const Shell = @import("../shell/shell.zig");
+const FS = @import("../fs/fs.zig");
 
 const FILE_NOT_FOUND_ERR = "File not found: ";
 
@@ -13,6 +14,7 @@ const PATH = "/home/martin/Travail/Nuzima/";
 pub const Distributer = struct {
     const Self = @This();
 
+    fs: *FS.FS,
     alloc: std.mem.Allocator,
     mutex: std.Thread.Mutex,
     process_list: std.ArrayList(*Process),

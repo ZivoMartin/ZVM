@@ -1,4 +1,4 @@
-const utils = @import("utils.zig");
+const utils = @import("../utils.zig");
 const Instruction = @import("instructions.zig").Instruction;
 const InstructionSigned = @import("instructions.zig").InstructionSigned;
 const std = @import("std");
